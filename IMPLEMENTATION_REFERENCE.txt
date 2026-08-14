@@ -1,0 +1,1193 @@
+PFAS RISK INTELLIGENCE PLATFORM
+Complete Implementation Reference
+==================================
+Version 5.1 | Geospatial Predictive Modelling for Per- and Polyfluoroalkyl Substances
+Author: Research Group | Last Updated: 2026
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE OF CONTENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ 1. System Overview
+ 2. Data Ingestion Pipeline
+ 3. Feature Engineering
+ 4. Spatial Block Cross-Validation (Algorithm)
+ 5. ADASYN Oversampling (Algorithm)
+ 6. Bayesian Hyperparameter Tuning — Optuna TPE (Algorithm)
+ 7. LightGBM Gradient-Boosted Decision Trees (Full Algorithm)
+ 7.5. Complete Training Pipeline & Parameters
+ 8. Isotonic Calibration (Algorithm)
+ 9. Concentration Regression Pipeline
+10. KD-Tree Spatial Index (Algorithm)
+11. SHAP Explainability (Algorithm)
+12. Simulation Engine — Monte Carlo Uncertainty (Algorithm)
+13. Evaluation Metrics — Formulas
+14. Hotspot Detection — Getis-Ord Gi* (Algorithm)
+15. Dashboard Architecture
+16. File & Directory Reference
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. SYSTEM OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The PFAS Risk Intelligence Platform is a fully local, API-independent geospatial
+machine-learning system that maps Polyfluoroalkyl substance contamination risk
+across arbitrary geographic coordinates.
+
+The pipeline consists of five sequential stages:
+
+  Stage 1: Data Ingestion & Cleaning            → implementation/clean.py
+  Stage 2: Feature Engineering & KD-Trees      → implementation/clean.py
+  Stage 3: Model Training & Calibration         → implementation/train.py
+  Stage 4: Inference Engine (API Layer)         → implementation/api.py
+  Stage 5: Streamlit Dashboard                  → implementation/dashboard/
+
+Primary outputs:
+  • exceedance_prob  : calibrated probability [0,1] that PFAS ≥ 100 ng/L
+  • concentration    : estimated PFAS concentration in ng/L (back-transformed log)
+  • shap_values      : per-feature contribution to this prediction
+  • confidence_level : HIGH / MEDIUM / LOW / EXTRAPOLATION
+
+Target PFAS compounds: PFBS, PFHpA, PFHxS, PFNA, PFDA, PFOA, PFOS
+Regulatory threshold: 100 ng/L (EU Drinking Water Directive, 20-compound sum)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. DATA INGESTION PIPELINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Three heterogeneous source types are merged into a single "golden dataset".
+
+SOURCE A — RAW_CSV (dataset/pfas_raw.csv)
+  • Direct flat-file ingestion
+  • Substance normalisation: free-text → canonical symbol (e.g. "Perfluorooctanoic
+    Acid" → "PFOA"; "PFHXA" → "PFHXS")
+  • Unit harmonisation: µg/L → ng/L (×1000); all values converted to ng/L
+  • Media classification into: surface water, groundwater, drinking water,
+    wastewater, soil, sediment, sea water, other
+  • Early substance filter: rows with unmapped substances are dropped immediately
+    to minimise memory allocation
+
+SOURCE B — PDH_PARQUET (dataset/pdh_data.parquet)
+  • Chunked batch ingestion (50,000 rows per batch) to prevent OOM
+  • JSON-nested pfas_values column is exploded: each individual compound-value
+    pair becomes its own row
+  • Less-than detections handled: if pfas_less_than is populated, value = LT/2
+    (standard substitution method for censored environmental data)
+  • Rows with only pfas_sum and no individual compounds are assigned substance
+    = "PFOS" (most common sum compound) as a conservative approximation
+
+SOURCE C — SHAPEFILE (dataset/pfas_contamination.shp)
+  • GeoPandas reads the vector file and reprojects to WGS-84 (EPSG:4326)
+  • Wide columns (one per substance) are melted into long format
+  • Geometry centroid extracted as lat/lon float32 fields
+
+MERGING & CLEANING
+  • All three frames are concatenated on a common schema
+  • Filters applied:
+      value ≥ 0.0001 ng/L         (exclude implausible zeros)
+      lat ∈ [-90, 90]             (valid latitude)
+      lon ∈ [-180, 180]           (valid longitude)
+  • Duplicate rows (same lat, lon, substance, value, year) are dropped
+  • All string columns are sanitised: NaN → "unknown" to satisfy PyArrow's
+    strict Parquet schema requirements (mixed str/float in object columns causes
+    ArrowTypeError)
+  • Final output: dataset/pfas_golden.parquet
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. FEATURE ENGINEERING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+14 features are derived. All are numerical (no one-hot encoding required by
+tree models).
+
+SUBSTANCE FEATURES (chemistry-derived)
+  substance_ord        Ordinal encoding of compound: PFBS=0, PFHpA=1, PFHxS=2,
+                       PFNA=3, PFDA=4, PFOA=5, PFOS=6
+                       (ordered by increasing persistence/toxicity concern)
+  is_long_chain        1 if compound ∈ {PFOS, PFOA, PFNA, PFDA} (≥8 carbons), else 0
+  carbon_chain_length  Integer carbon backbone length: PFBS=4, PFHpA=7, PFHxS=6,
+                       PFNA=9, PFDA=10, PFOA=8, PFOS=8
+  is_sulfonyl          1 if compound in sulfonate family {PFOS, PFHxS, PFBS}, else 0
+
+MEDIA FEATURES (sampling context)
+  is_aquatic           1 if sampled from water-based media (surface water, groundwater,
+                       drinking water, sea water)
+  is_soil_based        1 if sampled from soil or sediment
+  is_wastewater        1 if sampled from wastewater or leachate
+
+TEMPORAL FEATURES
+  year_normalized      (year − 2001) / 23.0  → normalises 2001-2024 to [0, 1]
+  is_post_2018         1 if year ≥ 2018 (EU introduced major PFAS restrictions)
+  month                Calendar month 1–12; -1 where date is unavailable
+
+SPATIAL LAG FEATURES (computed via KD-Tree)
+  spatial_density_50km  Count of training samples within 50 km great-circle radius
+                        Formula: count({i : haversine(p, p_i) ≤ 50 km})
+
+  mean_log_value_50km   Mean of log(value + 1) for all neighbours within 50 km
+                        Formula: (1/N) * Σ log(v_i + 1) where d_i ≤ 50 km
+
+  nearest_training_point_km
+                        Great-circle distance to the single closest training point
+                        Formula: EARTH_R * arccos(sin(φ₁)sin(φ₂) +
+                                         cos(φ₁)cos(φ₂)cos(Δλ))
+                        where EARTH_R = 6371 km
+
+  dist_to_airport_km    Great-circle distance to nearest large/medium airport
+                        Uses a separate KD-Tree built from OurAirports dataset
+
+TARGET VARIABLES
+  above_100_ng_l   Binary: 1 if value ≥ 100 ng/L, else 0  (classification target)
+  log_value        log1p(value) = log(value + 1) in ng/L   (regression target)
+                   log1p is monotone and handles zeros without undefined log(0)
+
+SPATIAL BLOCK ID (CV stratification)
+  spatial_block_id  String key = floor(lat/2) + "_" + floor(lon/2)
+                    This assigns each measurement to a 2°×2° geographic cell.
+                    Used as the group label for GroupKFold so that training and
+                    validation folds are spatially separated (no geographic leakage).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. SPATIAL BLOCK CROSS-VALIDATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Standard KFold cross-validation is INVALID for geospatial data because nearby
+points share spatial autocorrelation — they are statistically dependent.
+Randomly splitting leaks spatial structure from training set to validation set,
+producing optimistically biased performance estimates.
+
+ALGORITHM: GroupKFold with 2°×2° spatial blocks
+
+  Input:  X (feature matrix), y (labels), groups (spatial_block_id per row)
+  Output: K fold pairs (train_indices, val_indices) where no block appears in
+          both train and val within the same fold
+
+  Step 1: Identify all unique spatial block IDs: B = {b₁, b₂, ..., bₘ}
+  Step 2: Divide B into K ≈ equal partitions: B = B₁ ∪ B₂ ∪ ... ∪ Bₖ
+  Step 3: For each fold k:
+            val_indices  = {i : group[i] ∈ Bₖ}
+            train_indices = {i : group[i] ∉ Bₖ}
+  Step 4: Fit model on train_indices, evaluate on val_indices
+  Step 5: Aggregate metrics across K folds
+
+Guarantee: No training sample shares a 2°×2° cell with any validation sample.
+           This simulates the real deployment scenario where the model predicts
+           at locations it has never seen during training.
+
+K = 5 folds used throughout.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. ADASYN OVERSAMPLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The above_100_ng_l target is highly imbalanced (typically ~15–30% positive).
+ADASYN (Adaptive Synthetic Sampling Approach) is applied to TRAINING folds only.
+
+ALGORITHM: ADASYN
+
+  Input:  X_train, y_train (imbalanced), sampling_strategy=0.3, k_neighbors=5
+  Output: X_resampled, y_resampled (minority class synthetically increased to
+          30% of majority class size)
+
+  Step 1: For each minority sample xᵢ (label=1):
+            Compute rᵢ = (number of majority-class neighbours of xᵢ in k-NN) / k
+            rᵢ represents how "hard" xᵢ is to classify (surrounded by negatives)
+
+  Step 2: Normalise: r̂ᵢ = rᵢ / Σrᵢ
+            r̂ᵢ is the density distribution: harder samples get more synthetic
+            neighbours
+
+  Step 3: G = |majority| × sampling_strategy − |minority|
+            G is the total number of synthetic samples to generate
+
+  Step 4: For each minority sample xᵢ:
+            Gᵢ = G × r̂ᵢ   (more synthetics near decision boundary)
+            For each of Gᵢ iterations:
+              Pick a random minority neighbour xₙ from {k nearest minority}
+              Generate: x_syn = xᵢ + λ × (xₙ − xᵢ), where λ ~ Uniform(0, 1)
+              Add (x_syn, 1) to training set
+
+  Why on training folds only: applying ADASYN to val/test would inflate
+  performance metrics unrealistically. It is only used to help the model
+  learn the minority class boundary during training.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. BAYESIAN HYPERPARAMETER TUNING — OPTUNA TPE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Grid search is computationally infeasible for 8 hyperparameters. Optuna uses
+Tree-Structured Parzen Estimators (TPE) — a Bayesian optimisation algorithm.
+
+ALGORITHM: TPE (80 trials)
+
+  Objective: maximise Area Under the Precision-Recall Curve (PR-AUC) on a
+             single held-out spatial fold.
+
+  Search space:
+    n_estimators      ∈ [200, 800]    (number of boosting rounds)
+    num_leaves        ∈ [31, 255]     (max leaves per tree, controls complexity)
+    learning_rate     ∈ [0.01, 0.15]  (log-uniform: explores small rates well)
+    min_child_samples ∈ [10, 100]     (min samples to create a leaf node)
+    subsample         ∈ [0.5, 1.0]    (row sampling ratio per tree)
+    colsample_bytree  ∈ [0.5, 1.0]    (feature sampling ratio per tree)
+    reg_alpha         ∈ [0.0, 5.0]    (L1 regularisation)
+    reg_lambda        ∈ [0.0, 5.0]    (L2 regularisation)
+
+  Per trial t:
+    Step 1: Split all observations into two groups based on objective score:
+              L(θ) = {trials with score > threshold γ}   (good configs)
+              G(θ) = {trials with score ≤ threshold γ}   (bad configs)
+              γ is typically set to the top 15% quantile
+
+    Step 2: Fit density models:
+              l(θ) = Parzen window KDE over configurations in L(θ)
+              g(θ) = Parzen window KDE over configurations in G(θ)
+
+    Step 3: Propose next θ by maximising Expected Improvement (EI):
+              EI(θ) = l(θ) / g(θ)
+              This selects configurations likely to lie in the "good" region
+              while avoiding the "bad" region.
+
+    Step 4: Evaluate l(θ)/g(θ) on a large sample of candidate points;
+            pick the highest EI candidate as the next trial configuration.
+
+  After 80 trials: best_params = argmax_{t} PR-AUC(θ_t)
+  Early stopping: LightGBM training within each trial uses early_stopping(50)
+  — stops adding trees if validation PR-AUC does not improve for 50 rounds.
+
+PR-AUC (not ROC-AUC) is used as the tuning objective because it is more
+informative for imbalanced datasets where negative examples dominate.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. LIGHTGBM GRADIENT-BOOSTED DECISION TREES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LightGBM implements Gradient Boosted Decision Trees (GBDT) with two key
+optimisations: Gradient-based One-Side Sampling (GOSS) and Exclusive Feature
+Bundling (EFB).
+
+ALGORITHM: GBDT (standard foundation)
+
+  Given: training data (X, y), loss function L, learning rate η, T trees
+
+  Initialise model: F₀(x) = argmin_γ Σᵢ L(yᵢ, γ)
+                        For binary cross-entropy: F₀ = log(p̄ / (1-p̄))
+                        where p̄ = mean positive rate
+
+  For each iteration t = 1, ..., T:
+    Step 1 — Compute pseudo-residuals (negative gradient of loss):
+              rᵢₜ = -[∂L(yᵢ, Fₜ₋₁(xᵢ)) / ∂Fₜ₋₁(xᵢ)]
+              For binary cross-entropy: rᵢ = yᵢ − sigmoid(Fₜ₋₁(xᵢ))
+
+    Step 2 — Fit a shallow decision tree hₜ(x) to (X, r):
+              Each tree partitions X into J leaf regions {R₁, ..., Rⱼ}
+              Leaf value γⱼ = Σᵢ∈Rⱼ rᵢ / Σᵢ∈Rⱼ |rᵢ|(1−|rᵢ|)  [Newton step]
+
+    Step 3 — Update the ensemble:
+              Fₜ(x) = Fₜ₋₁(x) + η × hₜ(x)
+              η (learning_rate) shrinks each tree's contribution → regularises
+
+    Step 4 — Regularisation: L1 (reg_alpha) and L2 (reg_lambda) penalties
+              are added to the leaf score computation:
+              γⱼ = -(Σrᵢ) / (Σ Hᵢ + reg_lambda) − reg_alpha/2
+              where Hᵢ = |rᵢ|(1−|rᵢ|) is the diagonal Hessian
+
+  Final prediction (probability): p(x) = sigmoid(Fₜ(x)) = 1 / (1 + e^{-Fₜ(x)})
+
+LIGHTGBM GOSS OPTIMISATION
+  Standard GBDT samples rows uniformly. GOSS keeps all large-gradient samples
+  (they carry the most information) and subsamples small-gradient samples:
+    Step 1: Sort samples by |rᵢ| descending
+    Step 2: Keep top-a fraction (large gradients)
+    Step 3: Randomly sample b fraction from the rest (small gradients)
+    Step 4: Multiply small-gradient samples by (1-a)/b to correct for bias
+    Result: O(b) computation instead of O(n) per tree, same accuracy
+
+LIGHTGBM LEAF-WISE GROWTH
+  Standard GBDT grows level-wise (all leaves at same depth). LightGBM grows
+  leaf-wise: always splits the leaf with the largest gain first.
+    Loss reduction for split s on feature j:
+      Gain(s,j) = ½ × [GL²/(HL+λ) + GR²/(HR+λ) − (GL+GR)²/(HL+HR+λ)] − γ
+      where GL/GR = sum of gradients in left/right child
+            HL/HR = sum of hessians
+            λ = reg_lambda (L2), γ = min_gain_to_split
+  Leaf-wise splits achieve lower loss faster than level-wise for equal tree count.
+
+CLASS WEIGHT
+  class_weight="balanced" sets wᵢ = n_total / (2 × n_class[yᵢ])
+  This multiplies gradient and hessian of minority class samples, equivalent
+  to upsampling minority class in the loss function.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7.5 COMPLETE TRAINING PIPELINE & PARAMETERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The model training executes in four sequential stages (implemented in train.py):
+
+STAGE 1: OPTUNA HYPERPARAMETER TUNING
+  • Objective: Maximise PR-AUC (Average Precision) on a single held-out spatial fold.
+  • Trials: 80 iterations using TPE sampler.
+  • Validation: early_stopping(50) rounds to prevent overfitting.
+  • Search Space:
+      n_estimators      ∈ [200, 800]
+      num_leaves        ∈ [31, 255]
+      learning_rate     ∈ [0.01, 0.15] (log scale)
+      min_child_samples ∈ [10, 100]
+      subsample         ∈ [0.5, 1.0]
+      colsample_bytree  ∈ [0.5, 1.0]
+      reg_alpha         ∈ [0.0, 5.0]
+      reg_lambda        ∈ [0.0, 5.0]
+  • Static Parameters: class_weight="balanced", random_state=42.
+
+STAGE 2: SPATIAL BLOCK CV (LightGBM)
+  • The dynamically tuned best parameters from Stage 1 are applied to a full
+    5-fold Spatial GroupKFold Cross-Validation.
+  • ADASYN (sampling_strategy=0.3, k_neighbors=5) is applied only on the
+    training split of each fold.
+  • Metrics collected: ROC-AUC, PR-AUC, F1, Brier Score.
+
+STAGE 3: BASELINE EVALUATIONS
+  • Two baseline models are trained on the same 5-fold spatial splits for comparison.
+  • XGBoost Classifier:
+      n_estimators=400, max_depth=6, learning_rate=0.05,
+      scale_pos_weight = (negative count / positive count),
+      eval_metric="aucpr", random_state=42.
+  • Random Forest Classifier:
+      n_estimators=300, max_depth=20, min_samples_leaf=10,
+      class_weight="balanced", random_state=42.
+  (Note: ADASYN is not used for baselines, they rely on native class weighting).
+
+STAGE 4: FINAL TRAINING & CALIBRATION
+  • Full Dataset Training: The best LightGBM parameters are used to train a final
+    model on the entire dataset (after full-data ADASYN resampling).
+  • Isotonic Calibration: A separate CalibratedClassifierCV is fit on a 20%
+    spatial hold-out (wrapping a FrozenEstimator trained on the other 80%) to
+    recalibrate probabilities.
+  • Regressor Training: An LGBMRegressor is trained on the log-transformed
+    concentration target using the exact same Optuna-tuned parameters (with
+    class_weight="balanced" removed).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. ISOTONIC CALIBRATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Raw LightGBM probability outputs are often poorly calibrated (overconfident).
+Isotonic regression recalibrates them to match the empirical positive rate.
+
+ALGORITHM: CalibratedClassifierCV + FrozenEstimator
+
+  Step 1: Fix the trained LightGBM model with FrozenEstimator (prevents
+          re-fitting when CalibratedClassifierCV calls fit())
+
+  Step 2: On a held-out calibration split (20% of training data, same spatial
+          block constraint):
+            For each sample: obtain the raw score sᵢ = sigmoid(F_T(xᵢ))
+
+  Step 3: Fit Isotonic Regression on (sᵢ, yᵢ) pairs:
+            Find monotone non-decreasing step function m(s) minimising:
+            Σ (m(sᵢ) − yᵢ)² subject to m(s₁) ≤ m(s₂) for s₁ ≤ s₂
+
+            Solved by the Pool Adjacent Violators (PAV) algorithm:
+              - Process scores in ascending order
+              - If a pair violates monotonicity (m(sᵢ) > m(sᵢ₊₁)):
+                  merge the two points, replace with weighted average
+              - Continue until no violations remain
+
+  Step 4: At inference: p_calibrated(x) = m(p_raw(x))
+
+  Why isotonic and not Platt scaling?
+    Platt scaling fits a sigmoid: suitable when raw scores are sigmoidal.
+    Isotonic fitting is non-parametric — no shape assumption — and performs
+    better when the raw output is already somewhat calibrated (as with LightGBM).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. CONCENTRATION REGRESSION PIPELINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A separate LightGBM Regressor (LGBMRegressor) is trained to estimate
+absolute PFAS concentration.
+
+Target transformation:
+  y_log = log₁ₚ(value_ng_l) = log(value + 1)
+  Reason: PFAS concentrations span 4-5 orders of magnitude (0.001 to >10,000
+  ng/L). Log-transformation compresses the scale and makes the regression
+  target approximately normal, improving RMSE-minimisation.
+
+At inference:
+  log_pred = regressor.predict(X)
+  concentration_ngl = expm1(log_pred) = e^log_pred − 1
+  This back-transforms to the original ng/L scale.
+
+Same 14 features as the classifier. Same hyperparameter set (class_weight
+excluded — not applicable to regression).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. KD-TREE SPATIAL INDEX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ALGORITHM: KD-Tree (scipy.spatial.KDTree)
+
+Coordinates are converted from degrees to radians before indexing so that
+Euclidean distances in radian-space approximate great-circle (haversine) arcs
+for small angular separations.
+
+  Conversion: coord_rad = deg2rad([[lat, lon], ...])
+
+KD-Tree construction:
+  Step 1: Build a binary space-partitioning tree on M points in ℝ²
+  Step 2: At each node: choose the dimension with max variance, split at median
+  Step 3: Recursively partition until each leaf contains ≤ bucket_size points
+  Construction time: O(M log M); query time: O(log M) average
+
+Nearest-neighbour query for a new point p:
+  - Query returns d (distance in radians) and idx (index into training array)
+  - Convert to km: dist_km = d × EARTH_R   (EARTH_R = 6,371 km)
+
+Radius query (50 km spatial lag):
+  - radius_rad = 50.0 / EARTH_R
+  - query_ball_point returns all indices within that radian radius
+  - Used to compute spatial_density_50km and mean_log_value_50km
+
+Two separate KD-Trees are maintained:
+  outputs/kdtrees/training_points.pkl   — PFAS measurement locations
+  outputs/kdtrees/airports.pkl          — Airport locations (large + medium)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. SHAP EXPLAINABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ALGORITHM: TreeSHAP (Lundberg et al., 2020)
+
+SHAP (SHapley Additive exPlanations) values decompose a prediction f(x) into
+the sum of feature contributions:
+
+  f(x) = φ₀ + Σⱼ φⱼ(x)
+
+where:
+  φ₀     is the base value (average prediction over the training set)
+  φⱼ(x) is the SHAP value for feature j — how much feature j shifted the
+          prediction for this sample away from the base value
+
+SHAP values are grounded in Shapley values from cooperative game theory:
+
+  φⱼ = Σ_{S ⊆ F\{j}} [|S|!(|F|−|S|−1)! / |F|!] ×
+        [f(S ∪ {j}) − f(S)]
+
+  where F = set of all features
+        S = subset of features excluding j
+        f(S) = expected model output using only features in S
+        f(S ∪ {j}) − f(S) is the marginal contribution of feature j given S
+
+Interpretation:
+  φⱼ > 0 : feature j pushed this prediction ABOVE the baseline (increases risk)
+  φⱼ < 0 : feature j pushed this prediction BELOW the baseline (reduces risk)
+  φⱼ = 0 : feature j had no influence on this prediction
+
+TreeSHAP computes exact Shapley values for tree models in O(TLD²) time where
+T = number of trees, L = max leaves, D = max depth. This is polynomial (fast)
+compared to the exponential complexity of brute-force Shapley computation.
+
+The implementation uses feature_perturbation="tree_path_dependent": SHAP
+values are computed by following the tree path, respecting learned feature
+correlations (rather than marginalising over independent feature distributions).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. SIMULATION ENGINE — MONTE CARLO UNCERTAINTY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The Simulation Engine applies scenario "mods" (feature perturbations) to the
+baseline feature vector and re-runs inference.
+
+SCENARIO MODIFICATION OPERATORS
+  spatial_density_boost  → X[spatial_density_50km] ×= k
+  mean_log_value_boost   → X[mean_log_value_50km]  += δ
+  mean_log_value_reduction → X[mean_log_value_50km] ×= (1 − frac)
+  airport_distance_km    → X[dist_to_airport_km]   = value
+  is_post_2018_override  → X[is_post_2018]          = value
+
+ALGORITHM: Monte Carlo Uncertainty Estimation (1,000 runs)
+
+  Input: base feature vector X, modifier dict mods, n_runs=1000, noise_std=0.15
+
+  Step 1: Apply mods to get X_mod (the scenario feature vector)
+  Step 2: For run i = 1, ..., n_runs:
+            For each feature j with value v:
+              If v > 0: perturbed[j] = v × (1 + ε) where ε ~ N(0, noise_std²)
+              Else:     perturbed[j] = v + δ         where δ ~ N(0, (|v|×noise_std + 0.1)²)
+            p_i = model.predict_proba(perturbed)[1]
+  Step 3: Sort p = [p₁, ..., p_n_runs]
+            p5  = percentile(p, 5)   × 100   (lower uncertainty bound)
+            p50 = percentile(p, 50)  × 100   (median, ≈ point estimate)
+            p95 = percentile(p, 95)  × 100   (upper uncertainty bound)
+  Step 4: Report [p5, p50, p95] as the uncertainty interval
+
+Why noise_std=0.15?  A 15% coefficient of variation on features reflects
+typical environmental measurement uncertainty (sampling variability, lab error,
+temporal fluctuation) without overinflating the uncertainty band.
+
+RISK SCORE MAPPING
+  score = clip(exceedance_prob × 100, 0, 100)
+
+  Risk levels:
+    0  – 20  "Safe Zone"       green
+    20 – 40  "Watch Zone"      yellow
+    40 – 60  "Caution Zone"    orange
+    60 – 80  "High Alert"      red
+    80 – 100 "Critical Alert"  dark red
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. EVALUATION METRICS — FORMULAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Confusion matrix cells:
+  TP = True Positives  (predicted contaminated, actually contaminated)
+  TN = True Negatives  (predicted safe, actually safe)
+  FP = False Positives (predicted contaminated, actually safe)
+  FN = False Negatives (predicted safe, actually contaminated) ← most dangerous
+
+ACCURACY
+  Accuracy = (TP + TN) / (TP + TN + FP + FN)
+  Limitation: misleading for imbalanced classes.
+
+BALANCED ACCURACY
+  Balanced Accuracy = (Sensitivity + Specificity) / 2
+  Sensitivity  = TP / (TP + FN)   (recall for positives)
+  Specificity  = TN / (TN + FP)   (recall for negatives)
+
+PRECISION (Positive Predictive Value)
+  Precision = TP / (TP + FP)
+
+RECALL (Sensitivity / True Positive Rate)
+  Recall = TP / (TP + FN)
+
+F1 SCORE
+  F1 = 2 × (Precision × Recall) / (Precision + Recall)
+  Harmonic mean of precision and recall; robust to imbalance.
+
+ROC-AUC (Area Under Receiver Operating Characteristic Curve)
+  ROC plots TPR vs FPR across all thresholds.
+  AUC = ∫₀¹ TPR(FPR) d(FPR)
+  Range: 0.5 (random) to 1.0 (perfect). Target: ≥ 0.85.
+
+PR-AUC (Area Under Precision-Recall Curve)
+  PR plots Precision vs Recall across all thresholds.
+  More informative than ROC-AUC for imbalanced classes where TN >> TP.
+  Used as primary Optuna tuning objective.
+
+BRIER SCORE (calibration quality)
+  Brier = (1/N) Σᵢ (pᵢ − yᵢ)²
+  Range: 0 (perfect) to 0.25 (worst for 50/50 base rate).
+  Lower is better. Penalises confident wrong predictions heavily.
+
+MATTHEWS CORRELATION COEFFICIENT (MCC)
+  MCC = (TP×TN − FP×FN) / √((TP+FP)(TP+FN)(TN+FP)(TN+FN))
+  Range: -1 to +1. Unbiased for any class imbalance.
+
+REGRESSOR METRICS
+  MAE  = (1/N) Σ |y_pred − y_true|
+  RMSE = √[(1/N) Σ (y_pred − y_true)²]
+  R²   = 1 − [Σ(y_pred − y_true)²] / [Σ(y_true − ȳ)²]
+  All computed on log(concentration+1) scale to down-weight extreme outliers.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. HOTSPOT DETECTION — GETIS-ORD Gi* STATISTIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Hotspot clusters in the training data are identified using the Getis-Ord Gi*
+statistic — a spatial autocorrelation measure that identifies local clusters
+of high values.
+
+ALGORITHM: Getis-Ord Gi*
+
+  For each location i:
+  Gi* = [Σⱼ wᵢⱼxⱼ − X̄ Σⱼ wᵢⱼ] / [S × √(n Σⱼ wᵢⱼ² − (Σⱼ wᵢⱼ)²) / (n−1)]
+
+  where:
+    xⱼ     = log-concentration value at location j
+    wᵢⱼ    = spatial weight (1 if j within d km of i, 0 otherwise)
+    X̄      = mean(xⱼ) across all locations
+    S      = std(xⱼ) across all locations
+    n      = total number of locations
+
+  Gi* follows a standard normal distribution under the null hypothesis
+  (random spatial distribution).
+
+  Interpretation:
+    Gi* > +2.58  → statistically significant hot spot  (p < 0.01)
+    Gi* < -2.58  → statistically significant cold spot (p < 0.01)
+
+  Output: saved as outputs/spatial/pfas_hotspots.geojson (GeoJSON points with
+          gi_zscore field). Rendered on the Overview heatmap.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+15. DASHBOARD ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The Dash dashboard is modularised into:
+
+  implementation/dashboard/
+    main.py              — Dash app entry point, top navigation, dcc.Store state
+    dash_common.py       — shared cached data/model loaders, serializers, figures
+    assets/styles.css    — glass dashboard design system
+    pages/overview.py    — registered Overview page with cached map + KPI panels
+    pages/scanner.py     — registered Scanner page with geocode/prediction callbacks
+    pages/simulation.py  — registered Simulation page with scenario callbacks
+    pages/analysis.py    — registered Analysis page reading xai-store
+    pages/explorer.py    — registered Explorer page with chart filter callbacks
+    pages/ai_assistant.py — registered dedicated AI Assistant chat page
+
+KEY PERFORMANCE DECISIONS
+  • dash.register_page gives multi-page routing without Streamlit script reruns
+  • dcc.Store holds scan_result, sim_result, xai_result, and chat_history
+    in browser session storage
+  • functools.lru_cache caches parquet loaders and backend model objects once
+    per process
+  • Dash callbacks update only target components/stores: scanner result,
+    simulation outcome, explorer charts, analysis panel, or chat log
+  • FastMarkerCluster: renders 3,000+ map points as a single JavaScript call
+    instead of 3,000 Python→JavaScript serialisation calls (100× faster)
+  • Parquet column projection: only required columns are loaded (column-store
+    projection pushdown), minimising I/O and memory
+
+SESSION STATE KEYS
+  chat-store       : list of {role, text} objects for AI chat
+  scan-store       : dict from PFASPredictor.predict()
+  sim-store        : serialised SimResult from SimulationEngine
+  xai-store        : serialised ExplanationResult from XAIEngine.explain()
+  preset_lat/lon   : location preset from geocoder
+  sidebar_addr_prev: previous address for debounce comparison
+
+XAI CHAT ENGINE (implementation/xai.py)
+  • Fully deterministic — no external LLM API
+  • Keyword routing: user message is checked against _KB_KEYWORDS dict first
+    (PFAS science knowledge base)
+  • Regex routing: if no KB match, message is checked against 8 compiled regex
+    patterns (why risk, biggest factor, safety, concentration, remediation,
+    accuracy, coverage, score, simulation)
+  • Context-aware: if xai_result is set (post-scan), answers reference the
+    actual prediction (compound, probability, SHAP values)
+  • Fallback: if no pattern matches, returns a useful prompt with examples
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+16. FILE & DIRECTORY REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+project root/
+├── main.py                          — pipeline orchestrator (runs all stages)
+├── requirements.txt                 — Python dependencies
+├── implementation/
+│   ├── clean.py                     — data ingestion + feature engineering
+│   ├── train.py                     — model training + calibration
+│   ├── api.py                       — PFASPredictor inference class
+│   ├── simulation.py                — SimulationEngine + scenario presets
+│   ├── xai.py                       — XAIEngine + NL explanations
+│   ├── hotspot.py                   — Getis-Ord hotspot computation
+│   ├── cci.py                       — contamination cluster index
+│   ├── evaluate_classifier.py       — confusion matrix + ROC curve
+│   ├── evaluate_accuracy.py         — per-fold metrics + calibration + PR
+│   ├── evaluate_extended.py         — SHAP global, beeswarm, regressor, spatial
+│   └── dashboard/
+│       ├── main.py                  — Streamlit app entry point
+│       ├── common.py                — shared utilities + XAI panel
+│       ├── page_overview.py         — Overview tab
+│       ├── page_scanner.py          — Scanner tab
+│       ├── page_simulation.py       — Simulation tab
+│       ├── page_analysis.py         — Analysis tab
+│       └── page_explorer.py         — Explorer tab
+├── dataset/
+│   ├── pfas_raw.csv                 — raw PFAS measurements (CSV)
+│   ├── pdh_data.parquet             — Pan-European Drinking Water data
+│   ├── airports.csv                 — OurAirports dataset
+│   ├── pfas_contamination.shp       — vector contamination shapefile
+│   └── pfas_golden.parquet          — cleaned merged dataset (pipeline output)
+└── outputs/
+    ├── models/
+    │   ├── lgbm_calibrated.pkl      — production classifier (calibrated)
+    │   ├── lgbm_regressor.pkl       — concentration regressor
+    │   └── feature_schema.json      — ordered list of 14 feature names
+    ├── kdtrees/
+    │   ├── training_points.pkl      — KD-Tree on training lat/lon
+    │   ├── training_log_values.npy  — log-concentration aligned with tree
+    │   └── airports.pkl             — KD-Tree on airport lat/lon
+    ├── figures/
+    │   ├── eval_confusion_matrix.png
+    │   ├── eval_roc_curve.png
+    │   ├── eval_accuracy_bars.png
+    │   ├── eval_calibration_curve.png
+    │   ├── eval_precision_recall.png
+    │   ├── eval_shap_global.png
+    │   ├── eval_shap_beeswarm.png
+    │   ├── eval_regressor_scatter.png
+    │   └── eval_spatial_error.png
+    └── spatial/
+        └── pfas_hotspots.geojson    — Gi* hotspot locations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RUNNING THE EVALUATION SCRIPTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Pre-requisite: pipeline must have been run at least once (main.py) to generate
+               pfas_golden.parquet and the model pickle files.
+
+  # Activate virtual environment
+  source venv/bin/activate
+
+  # Confusion matrix + ROC curve
+  python implementation/evaluate_classifier.py
+
+  # Accuracy bars + calibration + PR curve
+  python implementation/evaluate_accuracy.py
+
+  # SHAP importance + beeswarm + regressor scatter + spatial error
+  python implementation/evaluate_extended.py
+
+All outputs saved to outputs/figures/
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+17. EVALUATION FIGURES — COMPLETE EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All figures evaluate the production model (lgbm_calibrated.pkl) on a 20%
+spatial hold-out created with GroupShuffleSplit(test_size=0.20, random_state=42).
+This means 20% of unique 2°×2° spatial blocks are withheld entirely from
+training and used exclusively for evaluation — no geographic leakage.
+
+Evaluation dataset (this run):  59,586 samples  |  positive rate: 5.5%
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 1 — eval_confusion_matrix.png
+Script: implement/evaluate_classifier.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  Two side-by-side matrices. The LEFT panel shows raw prediction counts in a
+  2×2 grid. The RIGHT panel shows the same matrix normalised by row (recall
+  per class). Both use a threshold of 0.5 to convert probabilities to labels.
+
+  Layout of each matrix:
+                          PREDICTED Safe   PREDICTED Contaminated
+  ACTUAL Safe          [  TN              FP  ]
+  ACTUAL Contaminated  [  FN              TP  ]
+
+HOW IT IS CALCULATED
+  Step 1: Model outputs predict_proba() for the 59,586 test samples.
+  Step 2: Predicted label = 1 if probability ≥ 0.5, else 0.
+  Step 3: Compare predicted label vs actual label (above_100_ng_l).
+  Step 4: Count TP, TN, FP, FN.
+  Step 5: Normalised matrix = each row divided by its row sum.
+          Row 0 sum = TN + FP (total actual negatives)
+          Row 1 sum = FN + TP (total actual positives)
+
+WHAT TO LOOK FOR
+  • Bottom-left cell (FN): "predicted safe but actually contaminated". This is
+    the most dangerous error in a public-health context. It should be as small
+    as possible. Check the normalised matrix — if the bottom-left % is high,
+    the recall for positives is low.
+  • Top-right cell (FP): "predicted contaminated but actually safe". This
+    triggers unnecessary alarm. A high FP rate reduces precision.
+  • The diagonal (TN + TP) should dominate both panels.
+  • Normalised recall for class 1 (bottom row) is more important than overall
+    accuracy because the positive class (contaminated) is only 5.5% of data.
+
+ACTUAL RESULTS (this model)
+  Raw stats shown in the figure footer.
+  Precision ≈ 0.88, Recall ≈ 0.75, F1 ≈ 0.81 at threshold 0.5.
+  The normalised recall for the contaminated class is ~75%, meaning 1 in 4
+  actual contaminated sites are missed at a 0.5 threshold. Lowering the threshold
+  (e.g. to 0.18 per the ROC optimal) significantly reduces FN at the cost of
+  more FP.
+
+COMPARISON CONTEXT
+  A random model on a 5.5% positive rate would have recall ≈ 5.5% and precision
+  ≈ 5.5% (a diagonal of mostly TN). Our model's F1 of 0.81 represents a 15×
+  improvement over random.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 2 — eval_roc_curve.png
+Script: implementation/evaluate_classifier.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  The Receiver Operating Characteristic (ROC) curve plots the True Positive Rate
+  (sensitivity) against the False Positive Rate (1 − specificity) at every
+  possible classification threshold from 0 to 1. The Area Under this Curve (AUC)
+  summarises performance in a single number.
+
+HOW IT IS CALCULATED
+  Step 1: For each threshold t ∈ [0, 1]:
+            TP_rate(t) = #{y=1 ∧ p≥t} / #{y=1}
+            FP_rate(t) = #{y=0 ∧ p≥t} / #{y=0}
+  Step 2: Sort (FP_rate, TP_rate) pairs and connect as a curve.
+  Step 3: AUC = area under this curve using the trapezoidal rule.
+  Step 4: Youden's J statistic identifies the optimal threshold:
+            J(t) = TP_rate(t) − FP_rate(t)
+            optimal_t = argmax J(t)
+          This maximises the sum of sensitivity and specificity.
+
+WHAT TO LOOK FOR
+  • The closer the curve hugs the TOP-LEFT corner, the better.
+  • A diagonal straight line from (0,0) to (1,1) = random classifier (AUC=0.5).
+  • The yellow dot marks the optimal threshold. In this model: threshold ≈ 0.184.
+    This means: classify as contaminated if predicted probability > 18.4%.
+    This deliberately low threshold is appropriate for safety-critical screening —
+    it is better to over-warn than to miss true contamination.
+  • AUC > 0.97 means the model correctly ranks a contaminated sample above a safe
+    sample 97.19% of the time when any pair is randomly drawn.
+
+ACTUAL RESULTS
+  ROC-AUC = 0.9719  (excellent; medical triage benchmarks aim for ≥0.85)
+  Optimal threshold = 0.184
+
+COMPARISON CONTEXT
+  ROC-AUC is threshold-independent, making it more reliable than Accuracy for
+  comparing classifiers. It is immune to class imbalance. XGBoost and Random
+  Forest baselines trained during Optuna tuning achieved AUC ~0.89–0.91,
+  compared to our calibrated LightGBM at 0.9719.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 3 — eval_accuracy_bars.png
+Script: implementation/evaluate_accuracy.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  A single bar chart with 7 metrics computed on the same spatial hold-out,
+  each shown as a single bar with its exact value annotated above it. The
+  dotted horizontal line at 0.5 marks the random baseline for AUC metrics.
+
+HOW EACH METRIC IS CALCULATED (formulas in Section 13)
+
+  ROC-AUC   = 0.9719  Area under ROC curve (threshold-free rank measure)
+  PR-AUC    = 0.8358  Area under Precision-Recall curve
+  F1        = 0.8097  Harmonic mean of precision and recall
+  Accuracy  = 0.9810  (TP+TN)/Total — MISLEADING here due to 5.5% positive rate
+  Bal. Acc. = 0.8661  Average of sensitivity and specificity — corrects for imbalance
+  Brier ↓   = 0.0206  Mean squared error of probabilities — lower = better calibrated
+  MCC       = 0.8041  Matthews Correlation Coefficient — most balanced single metric
+
+WHAT TO LOOK FOR
+  • Do NOT use raw Accuracy (0.981) as the headline number. A model that always
+    predicts "safe" would score 94.5% accuracy. Our model's true performance is
+    captured by MCC (0.80) and Balanced Accuracy (0.87).
+  • MCC > 0.8 is generally considered excellent.
+  • PR-AUC > 0.83 is strong for a 5.5% positive rate dataset.
+  • Brier score of 0.0206 means probability estimates deviate from true outcomes
+    by an average of √0.0206 ≈ 0.14 probability units — highly reliable for
+    risk scoring.
+
+COMPARISON CONTEXT
+  Reference values for a 5.5% positive-rate classification problem:
+    Random model:          ROC-AUC=0.50, PR-AUC=0.055, MCC≈0.00
+    Simple logistic reg.:  ROC-AUC≈0.75, PR-AUC≈0.30, MCC≈0.40
+    This model:            ROC-AUC=0.97, PR-AUC=0.84, MCC=0.80
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 4 — eval_calibration_curve.png
+Script: implementation/evaluate_accuracy.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  The reliability (calibration) diagram — also called the "calibration curve"
+  — shows whether predicted probabilities actually reflect empirical frequencies.
+  A perfectly calibrated model's curve lies exactly on the diagonal.
+
+HOW IT IS CALCULATED
+  Step 1: Bin the predicted probabilities into 12 equal-frequency quantile bins
+          (strategy="quantile" ensures bins are not empty for rare positives).
+  Step 2: For each bin b:
+            mean_pred(b) = average predicted probability of samples in bin b
+            frac_pos(b)  = fraction of samples in bin b that are actually positive
+  Step 3: Plot (mean_pred, frac_pos) as connected points over the [0,1]×[0,1] space.
+  Step 4: The Brier score (annotated in the text box) summarises calibration:
+            Brier = (1/N) Σᵢ (pᵢ − yᵢ)²
+            Range: 0 (perfect) to 0.25 (worst for a balanced dataset).
+            For a 5.5% positive rate, the worst possible Brier score is lower
+            than 0.25 — a naive "always predict 0" scores 0.055.
+            Our Brier = 0.0206 beats this naive baseline.
+
+WHAT TO LOOK FOR
+  • Points on the diagonal = perfectly calibrated. Our model's points closely
+    follow the diagonal, meaning predicted probabilities are reliable.
+  • Points ABOVE the diagonal: model is underconfident (actual rate > predicted).
+  • Points BELOW the diagonal: model is overconfident (actual rate < predicted).
+  • Yellow dashed lines show the deviation of each point from perfect calibration.
+    Shorter lines = better calibration.
+  • This plot validates the isotonic calibration step (Section 8). Without
+    calibration, LightGBM outputs are typically pushed toward 0 and 1 ends,
+    shown as a sigmoidal curve. Isotonic calibration corrects this.
+
+ACTUAL RESULTS
+  Brier Score = 0.0206 — very well calibrated.
+  The curve closely tracks the diagonal, confirming isotonic calibration worked.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 5 — eval_precision_recall.png
+Script: implementation/evaluate_accuracy.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  The Precision-Recall curve is more informative than ROC for imbalanced datasets.
+  It shows the trade-off between precision and recall at every threshold.
+
+HOW IT IS CALCULATED
+  Step 1: For each threshold t ∈ [0, 1]:
+            Precision(t) = TP(t) / (TP(t) + FP(t))
+            Recall(t)    = TP(t) / (TP(t) + FN(t))
+  Step 2: Plot (Recall, Precision) pairs at every threshold.
+  Step 3: Average Precision (AP) ≈ PR-AUC = Σ (Recall_n − Recall_{n-1}) × Precision_n
+          (trapezoidal area under the curve).
+  Step 4: Best F1 threshold found by:
+            F1(t) = 2 × P(t) × R(t) / (P(t) + R(t)) for each t
+            Best threshold = argmax F1(t)
+          Shown as the yellow dot.
+  Step 5: Dotted horizontal line = random baseline precision = positive rate = 5.5%.
+
+WHAT TO LOOK FOR
+  • A curve in the TOP-RIGHT corner means both high precision and high recall are
+    achievable simultaneously.
+  • The area under the curve (AP = 0.8358) should be compared to the baseline
+    of 0.055 (random model). Our model achieves 15× baseline precision.
+  • The yellow dot marks the threshold that maximises F1. Use this threshold in
+    the dashboard if you want the single best precision/recall trade-off.
+  • The sharp drop at high recall levels is typical — catching every contaminated
+    site requires lowering threshold so much that many safe sites are also flagged.
+
+ACTUAL RESULTS
+  PR-AUC = 0.8358   Best F1 ≈ 0.810 at threshold ≈ 0.184
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 6 — eval_shap_global.png
+Script: implementation/evaluate_extended.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  A horizontal bar chart of global feature importance ranked by mean absolute
+  SHAP value. This answers "Which features matter most for the model globally,
+  across the entire dataset?"
+
+HOW IT IS CALCULATED
+  Step 1: Draw 2,000 random samples from the dataset.
+  Step 2: Run TreeSHAP (Section 11) to compute φⱼ(xᵢ) for every feature j
+          and every sample i.
+  Step 3: Global importance for feature j:
+            importance(j) = (1/N) Σᵢ |φⱼ(xᵢ)|
+          This is the mean of the absolute SHAP values across all samples.
+  Step 4: Sort features by importance descending.
+  Step 5: Bars coloured green (top half by importance) vs blue (bottom half).
+          Values annotated to the right of each bar.
+
+WHAT TO LOOK FOR
+  • The longer the bar, the more that feature influences predictions on average.
+  • "Mean PFAS level nearby" (mean_log_value_50km) and "Nearby measurements"
+    (spatial_density_50km) typically top the ranking — confirming that LOCAL
+    contamination context is the strongest predictor.
+  • "Distance to Airport" is typically a top-5 feature, validating the AFFF
+    firefighting foam hypothesis.
+  • Features with near-zero bars (very short) contribute almost nothing to
+    predictions and could potentially be removed.
+
+COMPARISON CONTEXT
+  Global SHAP importance is more reliable than LightGBM's native feature
+  importance (split count or gain) because SHAP accounts for feature interactions
+  and does not favour high-cardinality features.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 7 — eval_shap_beeswarm.png
+Script: implementation/evaluate_extended.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  The SHAP beeswarm (summary) plot combines feature importance AND direction.
+  Each dot represents one sample. The x-axis is the SHAP value for that sample
+  (negative = reduces risk, positive = increases risk). The colour represents
+  the actual feature value for that sample (blue = low value, red = high value).
+
+HOW IT IS CALCULATED
+  Exactly as Figure 6, but instead of averaging, individual φⱼ(xᵢ) are plotted
+  as dots. Dots are jittered vertically to avoid overplotting. Colour mapping:
+    High feature value (red)  → high raw value of that feature
+    Low feature value (blue)  → low raw value of that feature
+
+WHAT TO LOOK FOR
+  • If red dots cluster on the RIGHT (positive SHAP): high values of this feature
+    INCREASE risk. Example: high mean_log_value_50km (red) → right → more risk.
+  • If red dots cluster on the LEFT (negative SHAP): high feature values DECREASE
+    risk. Example: high dist_to_airport_km (far from airport) → left → less risk.
+  • Width of the dot spread = frequency of that SHAP value in the dataset.
+  • Features at the top of the beeswarm are most impactful (ordered by mean |SHAP|
+    descending, same order as Figure 6).
+  • This plot reveals NON-LINEAR effects: if an important feature shows dots on
+    both sides, its direction of effect depends on context.
+
+COMPARISON TO FIGURE 6
+  Figure 6 tells you WHICH features matter. Figure 7 tells you HOW and in which
+  direction they matter, for each individual sample.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 8 — eval_regressor_scatter.png
+Script: implementation/evaluate_extended.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  Two-panel figure evaluating the concentration regressor (lgbm_regressor.pkl).
+
+  LEFT PANEL: Predicted vs Actual Scatter
+    x-axis = actual log(PFAS + 1) value (from dataset)
+    y-axis = predicted log(PFAS + 1) value (from model)
+    Yellow dashed line = perfect prediction (y = x)
+    Points close to the diagonal = accurate predictions.
+
+  RIGHT PANEL: Residual Distribution
+    x-axis = residual (predicted − actual)
+    y-axis = density
+    Green curve = fitted normal distribution over residuals.
+    Yellow dashed = zero error line.
+
+HOW IT IS CALCULATED
+  Step 1: Run GroupKFold CV (3 folds) on the regressor. Collect out-of-fold
+          predicted log-values and actual log-values.
+  Step 2: Compute:
+            MAE  = (1/N) Σ |predicted_i − actual_i|
+            RMSE = √[(1/N) Σ (predicted_i − actual_i)²]
+            R²   = 1 − Σ(pred − actual)² / Σ(actual − mean(actual))²
+  Step 3: Draw 4,000 random samples for the scatter plot (for rendering speed).
+  Step 4: Fit normal distribution to residuals (MLE on mean and std).
+
+WHAT TO LOOK FOR
+  • LEFT PANEL: Points should cluster tightly around y = x. Systematic deviation
+    above the line = model over-predicts. Below the line = under-predicts.
+    Wider scatter at high actual values = the model has more uncertainty at
+    extreme concentrations, which is expected for rare extreme events.
+  • R² annotation: should be > 0.80 for a useful regressor.
+  • RIGHT PANEL: Residuals should be approximately normal and centred on zero
+    (unbiased). A long right tail indicates the model systematically under-
+    predicts the highest concentrations.
+  • RMSE is on the log scale. Convert to multiplication factor: e^RMSE.
+    If RMSE = 0.6, that means predictions are typically off by a factor of e^0.6
+    ≈ 1.8× in concentration space. This is acceptable for environmental screening.
+
+COMPARISON CONTEXT
+  The regressor is complementary to the classifier. The classifier predicts
+  WHETHER contamination exceeds 100 ng/L; the regressor estimates HOW MUCH.
+  Together they give: (a) a binary risk alert and (b) a magnitude estimate.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIGURE 9 — eval_spatial_error.png
+Script: implementation/evaluate_extended.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT SHOWS
+  Two-panel figure showing how prediction error changes as a function of
+  distance between the prediction point and the nearest training data.
+
+  LEFT PANEL: Mean Absolute Error by distance band (km)
+  RIGHT PANEL: Number of samples in each distance band (coverage)
+
+HOW IT IS CALCULATED
+  Step 1: Apply the full production model to every sample in the golden dataset.
+          Compute absolute error: |predicted_probability − true_label|
+  Step 2: Bucket samples by their nearest_training_point_km value:
+            [0-10), [10-25), [25-50), [50-100), [100-200), [200-500),
+            [500-2000), [2000+)
+  Step 3: Compute mean absolute error within each bucket.
+  Step 4: Compute sample count within each bucket.
+
+WHAT TO LOOK FOR
+  • LEFT PANEL: Error should increase as distance grows. A flat (non-increasing)
+    error curve would be suspicious — it would mean spatial context doesn't
+    affect prediction quality, contradicting the geospatial theory.
+  • The steepest rise typically occurs at 100–500 km, where the model begins
+    extrapolating rather than interpolating.
+  • RIGHT PANEL: The vast majority of samples are in the 0–50 km range, meaning
+    most training data is dense. Bars beyond 500 km are sparse — this directly
+    explains why EXTRAPOLATION confidence is flagged in the dashboard.
+
+WHY THIS MATTERS
+  This analysis empirically validates the confidence_level system in the API:
+    HIGH confidence (< 100 km)  → lowest mean error
+    MEDIUM confidence (< 500 km) → moderate mean error
+    LOW / EXTRAPOLATION (> 500 km) → highest mean error
+  The figure provides the quantitative justification for these thresholds.
+
+COMPARISON CONTEXT
+  Without spatial features (spatial_density_50km, mean_log_value_50km,
+  nearest_training_point_km), this curve would be flat — all errors equal.
+  The slope of this curve is the empirical evidence that spatial context is
+  the dominant driver of model reliability.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CROSS-FIGURE COMPARISON SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The 9 figures collectively answer these questions:
+
+  "Does the model distinguish contaminated from safe?"
+    → Figure 1 (Confusion Matrix), Figure 2 (ROC), Figure 5 (PR curve)
+
+  "How accurate are the probabilities themselves?"
+    → Figure 4 (Calibration) — confirms probabilities are reliable for decisions
+
+  "How does it compare to simpler or random models?"
+    → Figure 3 (accuracy bars with 0.5 baseline) — MCC 0.80 vs 0.00 for random
+
+  "Which environmental factors drive risk?"
+    → Figure 6 (SHAP global bar) — which features matter
+    → Figure 7 (SHAP beeswarm) — in which direction and for whom
+
+  "How well does it estimate concentration, not just risk?"
+    → Figure 8 (regressor scatter + residuals) — R², RMSE, bias check
+
+  "Can I trust predictions in data-sparse regions?"
+    → Figure 9 (spatial error) — quantifies reliability degradation with distance
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRODUCTION RESULTS SUMMARY (this run)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Metric              Value     Benchmark      Interpretation
+  ─────────────────────────────────────────────────────────────────────────
+  ROC-AUC             0.9719    ≥ 0.85 good    Excellent discrimination
+  PR-AUC              0.8358    ≥ 0.50 good    Strong imbalanced class perf.
+  F1 (at 0.5 thresh)  0.8097    ≥ 0.70 good    Good precision/recall balance
+  Balanced Accuracy   0.8661    ≥ 0.70 good    Robust to 5.5% positive rate
+  Brier Score         0.0206    < 0.10 good     Well-calibrated probabilities
+  MCC                 0.8041    ≥ 0.70 good    Most robust overall metric
+  Optimal threshold   0.184     —              Use this for safety screening
+  ─────────────────────────────────────────────────────────────────────────
+
+  RECOMMENDATION: Use threshold = 0.184 (from Figure 2 ROC optimal point)
+  for operational screening because it maximises sensitivity + specificity.
+  The dashboard currently uses 0.5 for colour-coding; for regulatory use,
+  flag any location with predicted probability > 0.18 for follow-up sampling.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+END OF IMPLEMENTATION REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
