@@ -1,0 +1,915 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+/* ============================================================
+   DESIGN TOKENS — Warm Amber & Emerald Theme
+   ============================================================ */
+:root {
+  --bg: #f5f2ec;
+  --ink: #191715;
+  --muted: #6e6760;
+  --faint: #a19a92;
+  --card: #ffffff;
+  --border: rgba(25, 23, 21, 0.10);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+  --accent: #f28c62;
+  --accent-dark: #d96b34;
+  --accent-soft: rgba(242, 140, 98, 0.16);
+  --success: #2e8b57;
+  --success-dark: #1e5e3a;
+  --success-soft: rgba(46, 139, 87, 0.14);
+}
+
+/* ============================================================
+   GLOBAL RESET & FULL SCREEN FOUNDATION
+   ============================================================ */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* 100% FULL-SCREEN APP SHELL */
+.app-shell {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+}
+
+/* ============================================================
+   TOP BAR — 100% FLUID WIDTH
+   ============================================================ */
+.glass-topbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  padding: 14px 44px;
+  background: #f8f6f2;
+  border-bottom: 1px solid rgba(25, 23, 21, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.brand-title { font-size: 0.98rem; font-weight: 800; letter-spacing: -0.03em; color: var(--ink); }
+.brand-subtitle { margin-top: 1px; color: var(--muted); font-size: 0.72rem; }
+
+.top-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid rgba(25, 23, 21, 0.10);
+  border-radius: 999px;
+  background: #ece9e2;
+  justify-self: center;
+}
+
+.nav-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.80rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: all 160ms ease;
+}
+
+.nav-pill:hover { color: var(--ink); background: rgba(25, 23, 21, 0.05); }
+
+.nav-pill.active {
+  color: var(--ink);
+  background: #ffffff;
+  border-color: rgba(25, 23, 21, 0.10);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+}
+
+.nav-icon { font-size: 0.92rem; }
+
+.system-status {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid rgba(25, 23, 21, 0.10);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.status-dot.online {
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(46, 139, 87, 0.20);
+}
+
+/* ============================================================
+   PAGE STAGE — 100% FLUID FULL-SCREEN WIDTH
+   ============================================================ */
+.page-stage {
+  width: 100%;
+  min-height: calc(100vh - 80px);
+  padding: 28px 44px 44px 44px;
+  margin: 0;
+}
+
+.page-hero {
+  width: 100%;
+  margin: 0 0 28px 0;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: var(--success-dark);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.page-hero h1 {
+  font-size: clamp(2.2rem, 4.5vw, 3.8rem);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.page-hero p {
+  max-width: 800px;
+  margin-top: 12px;
+  color: var(--muted);
+  line-height: 1.65;
+  font-size: 0.96rem;
+}
+
+/* ============================================================
+   DASHBOARD GRID — 100% STRETCH FLUID 12 COLUMNS
+   ============================================================ */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+  /* CRITICAL: grid must NOT clip dropdown popups from child cards */
+  overflow: visible;
+}
+
+.span-3  { grid-column: span 3; min-width: 0; overflow: visible; position: relative; }
+.span-4  { grid-column: span 4; min-width: 0; overflow: visible; position: relative; }
+.span-5  { grid-column: span 5; min-width: 0; overflow: visible; position: relative; }
+.span-6  { grid-column: span 6; min-width: 0; overflow: visible; position: relative; }
+.span-7  { grid-column: span 7; min-width: 0; overflow: visible; position: relative; }
+.span-8  { grid-column: span 8; min-width: 0; overflow: visible; position: relative; }
+.span-9  { grid-column: span 9; min-width: 0; overflow: visible; position: relative; }
+.span-12 { grid-column: span 12; min-width: 0; overflow: visible; position: relative; }
+
+/* ============================================================
+   CARDS & CONTAINERS
+   ============================================================ */
+.glass-card {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  width: 100%;
+  min-width: 0;
+  /* CRITICAL: must be visible so floating dropdowns are not clipped */
+  overflow: visible;
+  position: relative;
+}
+
+/* ============================================================
+   METRIC CARDS — CLEAN HORIZONTAL ROWS
+   ============================================================ */
+.metric-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.result-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.metric-card {
+  padding: 20px 22px;
+  min-height: 118px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  border-left: 4px solid var(--accent);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: 0.70rem;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-value {
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 1.70rem;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-sub {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.section-title {
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+/* ============================================================
+   MAP
+   ============================================================ */
+.map-frame {
+  width: 100%;
+  height: 560px;
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.dash-graph, .js-plotly-plot { width: 100%; }
+
+/* ============================================================
+   FORM CONTROLS
+   ============================================================ */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  width: 100%;
+  /* Must be visible so dropdowns float above sibling rows */
+  overflow: visible;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  /* Stacking context so each field's dropdown overlays the next */
+  position: relative;
+  z-index: 10;
+}
+
+/* When a field's dropdown is open, boost its z-index above all siblings */
+.form-field:focus-within {
+  z-index: 200;
+}
+
+.form-field label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ============================================================
+   ASSESSMENT AREA (Slider container)
+   ============================================================ */
+.assessment-area {
+  margin-top: 20px;
+  padding: 22px 24px;
+  background: rgba(245, 242, 236, 0.7);
+  border: 1px solid rgba(25, 23, 21, 0.08);
+  border-radius: 10px;
+  width: 100%;
+}
+
+.assessment-area > label,
+.assessment-area .slider-label {
+  display: block;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+/* ============================================================
+   INPUT & TEXT FIELDS
+   ============================================================ */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="search"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1.5px solid rgba(25, 23, 21, 0.14) !important;
+  border-radius: 10px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+  font-family: inherit;
+  font-size: 0.90rem;
+  color: var(--ink);
+  outline: none !important;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(242, 140, 98, 0.20) !important;
+}
+
+/* ============================================================
+   DASH DROPDOWN (React Select) — POLISHED THEME & OVERLAP FIX
+   ============================================================ */
+
+.Select, div.Select, [class*="Select"] {
+  width: 100% !important;
+  position: relative !important;
+}
+
+.Select-control {
+  min-height: 44px !important;
+  border: 1.5px solid rgba(25, 23, 21, 0.14) !important;
+  border-radius: 10px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+  transition: border-color 160ms ease, box-shadow 160ms ease !important;
+  width: 100% !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+.Select-control:hover {
+  border-color: rgba(25, 23, 21, 0.28) !important;
+}
+
+.Select.is-focused > .Select-control,
+.Select.is-open > .Select-control {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(242, 140, 98, 0.20) !important;
+}
+
+.Select-placeholder {
+  color: var(--muted) !important;
+  font-size: 0.90rem !important;
+  line-height: 42px !important;
+  padding: 0 12px !important;
+}
+
+.Select-value {
+  line-height: 42px !important;
+  padding: 0 12px !important;
+}
+
+.Select-value-label {
+  font-size: 0.90rem !important;
+  color: var(--ink) !important;
+}
+
+/* Outer Menu Popover — Floating card overlay */
+.Select-menu-outer,
+div.Select-menu-outer,
+[class*="Select-menu-outer"] {
+  border: 1.5px solid rgba(25, 23, 21, 0.14) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 14px 40px rgba(25, 23, 21, 0.14) !important;
+  background: #ffffff !important;
+  margin-top: 6px !important;
+  padding: 8px 6px !important;
+  overflow: visible !important;
+  z-index: 99999 !important;
+  position: absolute !important;
+  top: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+}
+
+/* Fix dropdown menu header ("Select All" / "Deselect All") spacing & positioning */
+.Select-menu-outer > div:first-child,
+.Select-menu-outer header,
+[class*="Select-menu-outer"] > div:first-child {
+  display: block !important;
+  position: relative !important;
+  padding: 6px 12px !important;
+  margin-bottom: 6px !important;
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  color: var(--muted) !important;
+  clear: both !important;
+  width: 100% !important;
+}
+
+/* Fix search input inside dropdown menu (NO OVERLAP with Select All, NO PURPLE) */
+.Select-menu-outer input,
+.Select-menu-outer input[type="text"],
+.Select-menu-outer .Select-input input,
+[class*="Select-menu"] input {
+  display: block !important;
+  position: relative !important;
+  width: 100% !important;
+  min-height: 38px !important;
+  margin: 6px 0 10px 0 !important;
+  padding: 8px 12px 8px 34px !important;
+  border: 1.5px solid rgba(25, 23, 21, 0.14) !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: var(--ink) !important;
+  font-size: 0.88rem !important;
+  clear: both !important;
+}
+
+.Select-menu-outer input:focus,
+[class*="Select-menu"] input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(242, 140, 98, 0.20) !important;
+}
+
+/* Dropdown Menu Options Container */
+.Select-menu,
+div.Select-menu,
+[class*="Select-menu"] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  padding: 4px 0 !important;
+  max-height: 240px !important;
+  overflow-y: auto !important;
+  clear: both !important;
+}
+
+/* Option Items (NO PURPLE, Emerald Green theme) */
+.Select-option,
+div.Select-option,
+[class*="Select-option"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 9px 12px !important;
+  border-radius: 6px !important;
+  font-size: 0.88rem !important;
+  color: var(--ink) !important;
+  background: transparent !important;
+  cursor: pointer !important;
+  transition: background 100ms ease, color 100ms ease !important;
+  margin: 1px 0 !important;
+}
+
+.Select-option.is-focused,
+.Select-option:hover,
+[class*="Select-option"]:hover,
+[class*="Select-option"].is-focused {
+  background: var(--success-soft) !important;
+  color: var(--success-dark) !important;
+}
+
+.Select-option.is-selected,
+[class*="Select-option"].is-selected {
+  background: rgba(46, 139, 87, 0.14) !important;
+  color: var(--success-dark) !important;
+  font-weight: 700 !important;
+}
+
+/* Option Checkbox Colors */
+.Select-option input[type="checkbox"],
+[class*="Select-option"] input[type="checkbox"] {
+  accent-color: var(--success) !important;
+  width: 16px !important;
+  height: 16px !important;
+  cursor: pointer !important;
+}
+
+/* Multi-select Badges (Green Pills) */
+.Select--multi .Select-control {
+  min-height: 44px !important;
+  padding: 4px 8px !important;
+}
+
+.Select--multi .Select-value {
+  background: rgba(46, 139, 87, 0.12) !important;
+  border: 1px solid rgba(46, 139, 87, 0.30) !important;
+  border-radius: 6px !important;
+  color: var(--success-dark) !important;
+  font-size: 0.82rem !important;
+  font-weight: 600 !important;
+  margin: 3px 4px 3px 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  line-height: 1 !important;
+}
+
+.Select--multi .Select-value-icon {
+  padding: 3px 7px 3px 6px !important;
+  border-right: 1px solid rgba(46, 139, 87, 0.25) !important;
+  color: var(--success-dark) !important;
+  font-size: 1.1rem !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+}
+
+.Select--multi .Select-value-icon:hover {
+  background: rgba(46, 139, 87, 0.22) !important;
+}
+
+.Select--multi .Select-value-label {
+  padding: 4px 8px !important;
+  font-size: 0.82rem !important;
+}
+
+/* ============================================================
+   SLIDERS — STRICT COMPLETE PURPLE ERADICATION
+   ============================================================ */
+
+.rc-slider,
+div.rc-slider,
+[class*="rc-slider"] {
+  width: 100% !important;
+}
+
+.rc-slider-rail,
+div.rc-slider-rail,
+[class*="rc-slider-rail"] {
+  background-color: rgba(25, 23, 21, 0.14) !important;
+  height: 6px !important;
+  border-radius: 3px !important;
+}
+
+.rc-slider-track,
+div.rc-slider-track,
+[class*="rc-slider-track"],
+div[style*="background"][class*="rc-slider"],
+div[style*="background-color"][class*="rc-slider"] {
+  background-color: #2E8B57 !important;
+  background: #2E8B57 !important;
+  height: 6px !important;
+  border-radius: 3px !important;
+}
+
+.rc-slider-handle,
+div.rc-slider-handle,
+a.rc-slider-handle,
+button.rc-slider-handle,
+[class*="rc-slider-handle"] {
+  border: 2.5px solid #F28C62 !important;
+  background-color: #ffffff !important;
+  background: #ffffff !important;
+  width: 18px !important;
+  height: 18px !important;
+  margin-top: -6px !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15) !important;
+  opacity: 1 !important;
+  outline: none !important;
+  cursor: grab !important;
+}
+
+.rc-slider-handle:hover,
+.rc-slider-handle:focus,
+.rc-slider-handle:active,
+.rc-slider-handle-click-focused,
+[class*="rc-slider-handle"]:focus,
+[class*="rc-slider-handle"]:active {
+  border-color: #D96B34 !important;
+  box-shadow: 0 0 0 4px rgba(242, 140, 98, 0.25) !important;
+  outline: none !important;
+}
+
+.rc-slider-dot,
+div.rc-slider-dot,
+[class*="rc-slider-dot"] {
+  border-color: rgba(25, 23, 21, 0.20) !important;
+  width: 8px !important;
+  height: 8px !important;
+  bottom: -1px !important;
+  background: #ffffff !important;
+}
+
+.rc-slider-dot-active,
+div.rc-slider-dot-active,
+[class*="rc-slider-dot-active"] {
+  border-color: #2E8B57 !important;
+  background: rgba(46, 139, 87, 0.15) !important;
+}
+
+.rc-slider-mark-text,
+span.rc-slider-mark-text,
+[class*="rc-slider-mark-text"] {
+  font-size: 0.75rem !important;
+  color: var(--muted) !important;
+  font-weight: 600 !important;
+  font-family: Inter, system-ui, sans-serif !important;
+}
+
+.rc-slider-mark-text-active,
+span.rc-slider-mark-text-active,
+[class*="rc-slider-mark-text-active"] {
+  color: var(--ink) !important;
+  font-weight: 700 !important;
+}
+
+.rc-slider-tooltip-inner {
+  background-color: var(--ink) !important;
+  border-radius: 6px !important;
+  font-size: 0.78rem !important;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+button,
+.primary-button,
+.secondary-button {
+  min-height: 44px;
+  padding: 0 22px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: all 160ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.primary-button {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  box-shadow: 0 4px 12px rgba(242, 140, 98, 0.28);
+}
+
+.primary-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(242, 140, 98, 0.36);
+}
+
+.secondary-button {
+  color: var(--ink);
+  background: #ffffff;
+  border-color: rgba(25, 23, 21, 0.14);
+}
+
+.secondary-button:hover { background: rgba(25, 23, 21, 0.04); }
+
+.status-note {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   AI ASSISTANT PAGE — 100% FLUID FULL SCREEN
+   ============================================================ */
+.assistant-page {
+  width: 100%;
+  padding: 28px 44px 44px 44px;
+  background: var(--bg);
+}
+
+.assistant-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+  min-height: calc(100vh - 120px);
+}
+
+.assistant-main-panel,
+.assistant-context-card {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  width: 100%;
+  min-width: 0;
+}
+
+.assistant-main-panel {
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.assistant-context {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.assistant-context-card { padding: 22px; }
+
+.assistant-card-title {
+  margin-bottom: 12px;
+  color: var(--success-dark);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+  width: 100%;
+}
+
+.prompt-button {
+  min-height: 48px;
+  padding: 10px 14px;
+  white-space: normal;
+  text-align: left;
+  color: var(--ink);
+  background: #f8f7f4;
+  border: 1px solid rgba(25, 23, 21, 0.10);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.prompt-button:hover {
+  background: var(--success-soft);
+  border-color: rgba(46, 139, 87, 0.30);
+  color: var(--success-dark);
+}
+
+.chat-log {
+  height: 460px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: #faf9f6;
+  border: 1px solid rgba(25, 23, 21, 0.08);
+  border-radius: 10px;
+}
+
+.message {
+  max-width: 86%;
+  padding: 14px 18px;
+  border-radius: 10px;
+  line-height: 1.65;
+  font-size: 0.90rem;
+  white-space: pre-wrap;
+}
+
+.message.user {
+  align-self: flex-end;
+  color: #ffffff;
+  background: var(--ink);
+  border-bottom-right-radius: 3px;
+}
+
+.message.ai {
+  align-self: flex-start;
+  color: var(--ink);
+  background: #ffffff;
+  border: 1px solid rgba(25, 23, 21, 0.09);
+  border-bottom-left-radius: 3px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+}
+
+.chat-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.assistant-chart { width: 100%; }
+
+.pill-list { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pill {
+  padding: 6px 14px;
+  border-radius: 999px;
+  color: var(--success-dark);
+  background: var(--success-soft);
+  border: 1px solid rgba(46, 139, 87, 0.20);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+/* ============================================================
+   RESPONSIVE BREAKPOINTS
+   ============================================================ */
+@media (max-width: 1200px) {
+  .metric-grid-4, .result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .assistant-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 980px) {
+  .glass-topbar { padding: 12px 20px; grid-template-columns: 1fr auto; gap: 12px; }
+  .top-nav { overflow-x: auto; }
+  .system-status { display: none; }
+  .page-stage, .assistant-page { padding: 20px; }
+  .dashboard-grid { gap: 16px; }
+  .span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-9, .span-12 { grid-column: span 12; }
+  .result-metrics, .metric-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .form-grid { grid-template-columns: 1fr; }
+  .prompt-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

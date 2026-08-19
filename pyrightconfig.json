@@ -1,0 +1,17 @@
+{
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "venvPath": ".",
+  "venv": "venv",
+  "typeCheckingMode": "basic",
+  "exclude": [
+    "venv",
+    "**/__pycache__"
+  ],
+  "ignore": [
+    "implementation/dashboard/common.py"
+  ],
+  "reportMissingModuleSource": "none",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none"
+}

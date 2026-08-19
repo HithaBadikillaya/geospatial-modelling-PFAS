@@ -16,14 +16,14 @@ PFAS (per- and polyfluoroalkyl substances) are man-made chemicals found in soil,
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# 1. Activate the Python virtual environment
+source venv/bin/activate
 
-# 2. Run the full pipeline (cleaning → training → hotspots → CCI)
+# 2. Run the pipeline (optional if models/dataset are already built)
 python main.py
 
-# 3. Launch the dashboard
-streamlit run implementation/dashboard.py
+# 3. Launch the Dash dashboard
+python implementation/dashboard/main.py
 ```
 
 ---
@@ -35,8 +35,9 @@ streamlit run implementation/dashboard.py
 | **Overview** | Europe-wide contamination heatmap + KPI metrics |
 | **Risk Scanner** | Enter any location → get a risk score, concentration estimate, and plain-English explanation |
 | **Simulation Lab** | Choose scenario presets (Industrial Spill, Airport Expansion, Cleanup Drive…) and see how risk changes |
-| **AI Explain** | SHAP waterfall chart + live chat assistant — ask anything in plain language |
-| **Data Explorer** | Temporal trends, compound comparison, country breakdown |
+| **Analysis** | SHAP factor attribution for the active Scanner prediction |
+| **Data Explorer** | Temporal trends, compound comparison, exceedance distribution |
+| **AI Assistant** | Dedicated chat page for PFAS questions and context-aware explanations |
 
 ---
 
@@ -81,5 +82,4 @@ streamlit run implementation/dashboard.py
 | PFBS | C4 sulfonate | Short-chain |  Monitor |
 
 ---
-
 
