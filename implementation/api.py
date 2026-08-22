@@ -132,6 +132,15 @@ class PFASPredictor:
 
         log.info("PFASPredictor initialized successfully.")
 
+    def _predict_probability(self, X: pd.DataFrame) -> float:
+        probability = float(self.clf.predict_proba(X)[0, 1])
+        if probability in (0.0, 1.0) and hasattr(self.clf, "calibrated_classifiers_"):
+            calibrated = self.clf.calibrated_classifiers_
+            if calibrated:
+                base_model = calibrated[0].estimator
+                probability = float(base_model.predict_proba(X)[0, 1])
+        return float(np.clip(probability, 0.0, 1.0))
+
     def build_feature_frame(
         self,
         lat: float,
@@ -266,7 +275,7 @@ class PFASPredictor:
         X, nearest_km, airport_km = self.build_feature_frame(lat, lon, substance, year, media_type)
 
         try:
-            prob = float(self.clf.predict_proba(X)[0, 1])
+            prob = self._predict_probability(X)
         except Exception:
             prob = 0.5
 
