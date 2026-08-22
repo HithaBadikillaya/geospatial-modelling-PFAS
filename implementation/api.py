@@ -149,6 +149,8 @@ class PFASPredictor:
                 nearest_km = float(d_tr[0]) * EARTH_R
             except Exception:
                 nearest_km = 120.0
+        if not np.isfinite(nearest_km):
+            nearest_km = 120.0
 
         airport_km = 45.0
         if self.tree_air is not None:
@@ -157,6 +159,8 @@ class PFASPredictor:
                 airport_km = float(d_air[0]) * EARTH_R
             except Exception:
                 airport_km = 45.0
+        if not np.isfinite(airport_km):
+            airport_km = 45.0
 
         # Spatial density & log value
         mean_log_50 = 2.4

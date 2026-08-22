@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from dataclasses import asdict
@@ -17,6 +18,8 @@ import plotly.graph_objects as go
 import pyarrow.parquet as pq
 from dash import dcc, html
 from folium.plugins import FastMarkerCluster, HeatMap
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 GOLDEN_PATH = ROOT / "dataset" / "pfas_golden.parquet"

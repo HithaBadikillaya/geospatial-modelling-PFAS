@@ -214,6 +214,8 @@ class SimulationEngine:
         label: str = "Custom Scenario",
     ) -> SimResult:
         """Run a custom scenario with explicit modifier dict."""
+        base_features = base_features.copy()
+        base_features = base_features.replace([np.inf, -np.inf], np.nan).fillna(-1)
         base_prob     = self._predict_prob(base_features)
         mod_features  = self._apply_mods(base_features, mods)
         scenario_prob = self._predict_prob(mod_features)
@@ -226,7 +228,7 @@ class SimulationEngine:
         feature_deltas = {}
         for col in self.schema:
             b_val = float(base_features[col].iloc[0]) if col in base_features.columns else 0.0
-            s_val = float(mod_features[col].iloc[0])  if col in mod_features.columns  else 0.0
+            s_val = float(mod_features[col].iloc[0]) if col in mod_features.columns else 0.0
             if abs(b_val - s_val) > 1e-6:
                 feature_deltas[col] = round(s_val - b_val, 4)
 
