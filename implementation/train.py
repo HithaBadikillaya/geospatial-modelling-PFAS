@@ -169,7 +169,7 @@ def train():
 
     # Feature matrix for classification
     clf_df = df.dropna(subset=[TARGET_CLF]).copy()
-    X      = clf_df[FEATURE_COLS].fillna(-1).values
+    X      = clf_df[FEATURE_COLS].replace([np.inf, -np.inf], np.nan).fillna(-1).values
     y      = clf_df[TARGET_CLF].values.astype(int)
     groups = clf_df[GROUP_COL].values if GROUP_COL in clf_df.columns else np.arange(len(clf_df))
 
@@ -177,6 +177,8 @@ def train():
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Set tracking URI to local mlruns folder using a relative path to avoid encoding issues
+    mlflow.set_tracking_uri("mlruns")
     mlflow.set_experiment("PFAS_Risk_Modelling")
 
     with mlflow.start_run(run_name=f"training_{int(time.time())}"):
@@ -253,7 +255,7 @@ def train():
 
         # LightGBM regressor
         reg_df  = df.dropna(subset=[TARGET_REG]).copy()
-        X_reg   = reg_df[FEATURE_COLS].fillna(-1).values
+        X_reg   = reg_df[FEATURE_COLS].replace([np.inf, -np.inf], np.nan).fillna(-1).values
         y_reg   = reg_df[TARGET_REG].values
         lgbm_reg = LGBMRegressor(**{k: v for k, v in best_params.items()
                                     if k not in ("class_weight",)})

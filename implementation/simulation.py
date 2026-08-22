@@ -167,6 +167,10 @@ class SimulationEngine:
     def _predict_prob(self, X: pd.DataFrame) -> float:
         X_aligned = X.reindex(columns=self.schema, fill_value=-1).fillna(-1)
         prob = self.model.predict_proba(X_aligned)[0, 1]
+        if prob in (0.0, 1.0) and hasattr(self.model, "calibrated_classifiers_"):
+            calibrated = self.model.calibrated_classifiers_
+            if calibrated:
+                prob = calibrated[0].estimator.predict_proba(X_aligned)[0, 1]
         return float(np.clip(prob, 0.0, 1.0))
 
     def _apply_mods(self, base: pd.DataFrame, mods: dict) -> pd.DataFrame:
@@ -214,6 +218,8 @@ class SimulationEngine:
         label: str = "Custom Scenario",
     ) -> SimResult:
         """Run a custom scenario with explicit modifier dict."""
+        base_features = base_features.copy()
+        base_features = base_features.replace([np.inf, -np.inf], np.nan).fillna(-1)
         base_prob     = self._predict_prob(base_features)
         mod_features  = self._apply_mods(base_features, mods)
         scenario_prob = self._predict_prob(mod_features)
@@ -226,7 +232,7 @@ class SimulationEngine:
         feature_deltas = {}
         for col in self.schema:
             b_val = float(base_features[col].iloc[0]) if col in base_features.columns else 0.0
-            s_val = float(mod_features[col].iloc[0])  if col in mod_features.columns  else 0.0
+            s_val = float(mod_features[col].iloc[0]) if col in mod_features.columns else 0.0
             if abs(b_val - s_val) > 1e-6:
                 feature_deltas[col] = round(s_val - b_val, 4)
 

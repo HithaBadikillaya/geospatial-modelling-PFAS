@@ -56,20 +56,31 @@ FEATURE_LABELS: Dict[str, str] = {
 # Expanded PFAS science knowledge base
 # ---------------------------------------------------------------------------
 PFAS_KNOWLEDGE: Dict[str, str] = {
-    # ── Map UI ──
+    # ── Dashboard and map UI ──
     "map_icon": (
-        "Map icons and markers explained:\n\n"
-        "🏠 Home / place pin: marks the exact location you selected for analysis — "
-        "either typed in manually or chosen via the address search. This is the point "
-        "the model assessed for PFAS risk.\n\n"
-        "Green dots / cluster markers: each dot represents a historical PFAS measurement "
-        "from the training dataset (a real laboratory sample). The denser the dots, the more "
-        "real-world data covers that area — this directly increases prediction confidence.\n\n"
-        "Number on a cluster bubble (e.g. '142'): this is the count of individual PFAS "
-        "measurements within that geographic cluster. Click the cluster to zoom in and see individual points.\n\n"
-        "Heatmap gradient (green → white): the colour wash shows contamination density from "
-        "the Gi* hotspot analysis. Bright white areas are statistically significant hotspots "
-        "(Gi* z-score > 2.58) — areas where measured PFAS concentrations are unusually high."
+        "The Overview map is an offline geographic coordinate view:\n\n"
+        "• Green points are sampled historical PFAS measurements from the local training dataset.\n"
+        "• Orange points are detected hotspots. Darker orange means a stronger local Gi* hotspot statistic.\n"
+        "• Country outlines, country labels, and major-city labels provide familiar geographic context. The horizontal axis is longitude and the vertical axis is latitude. You can zoom, pan, and hover over points.\n\n"
+        "It indicates evidence coverage and detected spatial clustering; it is not a regulatory contamination map "
+        "or a substitute for local laboratory sampling."
+    ),
+    "offline_map": (
+        "The current map is different from the previous version in an important way: it works without internet access.\n\n"
+        "Previous version: a Folium map inside an iframe using CartoDB basemap tiles. It could show roads, borders, "
+        "and place labels, but those tiles were downloaded from the internet and could fail or appear blank offline.\n\n"
+        "Current version: a Plotly map built entirely from local country boundaries, PFAS measurements, and the "
+        "locally generated hotspot GeoJSON. It has no basemap-tile, geocoding, or external-font request. "
+        "It supports zoom, pan, hover, country outlines, country labels, and major-city labels, but intentionally does not show street-level roads or labels."
+    ),
+    "project": (
+        "This PFAS Geospatial Intelligence Platform is a research-screening dashboard, not a regulatory decision system.\n\n"
+        "1. Data pipeline: cleans PFAS measurements and builds geographic proximity features.\n"
+        "2. Scanner: estimates the chance of exceeding 100 ng/L and an expected concentration for chosen coordinates, compound, year, and medium.\n"
+        "3. Analysis: uses SHAP values to show which input features increased or reduced the prediction.\n"
+        "4. Simulation Lab: changes selected features to compare contamination or remediation scenarios.\n"
+        "5. Explorer and Overview: summarize the locally stored measurement and hotspot data.\n\n"
+        "Use it to prioritize investigation and then confirm conclusions with accredited laboratory analysis."
     ),
 
     # ── General PFAS science ──
@@ -379,6 +390,15 @@ _KB_KEYWORDS = {
         "heatmap", "legend", "icons mean", "symbols", "map mean", "pin on the map",
         "what does the map show",
     ],
+    "offline_map": [
+        "offline map", "map offline", "without internet", "no internet", "map different",
+        "previous map", "old map", "map tiles", "basemap", "cartodb",
+    ],
+    "project": [
+        "this project", "this platform", "this dashboard", "this application", "this app",
+        "project do", "platform do", "dashboard do", "project work", "platform work",
+        "explain the project", "explain this dashboard", "about the project",
+    ],
     "pfos": ["pfos", "perfluorooctane sulfon", "sulfonate", "firefighting foam", "afff"],
     "pfoa": ["pfoa", "perfluorooctanoic", "teflon", "non-stick", "carcinogen", "cancer", "dupont"],
     "pfhxs": ["pfhxs", "pfhxs", "perfluorohexane"],
@@ -527,6 +547,41 @@ class XAIEngine:
         """
         msg = user_message.strip().lower()
         ctx = self._context
+
+        # Resolve specific multi-factor and action questions before shorter
+        # overlapping phrases such as "factor" and "should I".
+        if re.search(r"(all|every|full|complete).*(factor|driver|reason|influence|breakdown)", msg):
+            return self._answer_all_factors(ctx)
+
+        if re.search(r"(next step|what should i do|what do i do next|recommend.*action|action.*recommend|what action)", msg):
+            return self._answer_next_steps(ctx)
+
+        if re.search(r"(map.*(different|previous|old|offline|internet)|(?:different|previous|old|offline|internet).*map)", msg):
+            return PFAS_KNOWLEDGE["offline_map"]
+
+        # Site-specific intents come before broad knowledge-base keywords.
+        # This prevents words such as "health", "model", or "safe" from
+        # masking a more useful answer about the active scanner result.
+        if re.search(r"why.*(risk|high|low|dangerous|probability|percent|elevated|so bad)", msg):
+            return self._answer_why_risk(ctx)
+
+        if re.search(r"(biggest|main|top|primary|most important|key|dominant|strongest).*(factor|driver|cause|reason|predictor|influence)", msg):
+            return self._answer_top_factor(ctx)
+
+        if re.search(r"(safe|worry|concerned|danger|drink|swim|eat|use|should i|can i|okay to|risk to)", msg):
+            return self._answer_safety(ctx)
+
+        if re.search(r"(accurate|trust|reliable|correct|wrong|error|sure|certain|validation|performance|how good)", msg):
+            return self._answer_accuracy(ctx)
+
+        if re.search(r"(nearest|closest|data|nearby|close|coverage|distance|training)", msg):
+            return self._answer_coverage(ctx)
+
+        if re.search(r"(concentration|how much|ng|level|amount|estimate|detected|measure)", msg):
+            return self._answer_concentration(ctx)
+
+        if re.search(r"(protective|what is protecting|what reduce|what lower|what help|what is good|positive)", msg):
+            return self._answer_protective_factors(ctx)
 
         # ── Step 1: Knowledge-base lookup (exact keyword match) ──
         for topic, keywords in _KB_KEYWORDS.items():

@@ -8,7 +8,7 @@ from dash_common import (
     glass_card,
     load_summary,
     metric,
-    overview_map_html,
+    overview_map_figure,
     page_header,
     section_title,
     source_mix_figure,
@@ -50,9 +50,12 @@ def layout():
                         ],
                         className="metric-grid-4 span-12",
                     ),
-                    # Row 2: Sampling Density Map (8 columns) + Source Mix Chart (4 columns)
+                    # Row 2: Offline sampling map (8 columns) + Source Mix Chart (4 columns)
                     glass_card(
-                        [section_title("Sampling density"), html.Iframe(srcDoc=overview_map_html(), className="map-frame")],
+                        [
+                            section_title("Sampling density"),
+                            dcc.Graph(figure=overview_map_figure(), config={"displayModeBar": False}),
+                        ],
                         "span-8",
                     ),
                     glass_card(
@@ -76,7 +79,7 @@ def layout():
                                 [
                                     html.Span("screening", className="pill"),
                                     html.Span("non-regulatory", className="pill"),
-                                    html.Span("cached map", className="pill"),
+                                    html.Span("offline map", className="pill"),
                                     html.Span("ensemble ML", className="pill"),
                                 ],
                                 className="pill-list",
