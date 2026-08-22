@@ -9,7 +9,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -17,13 +16,19 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pyarrow.parquet as pq
 from dash import dcc, html
-from folium.plugins import FastMarkerCluster, HeatMap
 
 log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 GOLDEN_PATH = ROOT / "dataset" / "pfas_golden.parquet"
 HOTSPOT_PATH = ROOT / "outputs" / "spatial" / "pfas_hotspots.geojson"
+BASEMAP_PATH = ROOT / "implementation" / "dashboard" / "assets" / "world_basemap" / "naturalearth_lowres.shp"
+AIRPORTS_PATH = ROOT / "dataset" / "airports.csv"
+MAP_CITY_LABELS = {
+    "Amsterdam", "Athens", "Berlin", "Brussels", "Budapest", "Copenhagen",
+    "Dublin", "Helsinki", "Lisbon", "London", "Madrid", "Oslo", "Paris",
+    "Prague", "Rome", "Stockholm", "Vienna", "Warsaw", "Zurich",
+}
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/pfas-matplotlib")
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
@@ -77,6 +82,15 @@ def load_summary() -> dict[str, Any] | None:
     df = pd.read_parquet(GOLDEN_PATH, columns=cols)
     year_s = pd.to_numeric(df.get("year", pd.Series(dtype=float)), errors="coerce")
     exc_s = pd.to_numeric(df.get("above_100_ng_l", pd.Series(dtype=float)), errors="coerce")
+    label_data = df.dropna(subset=["country", "lat", "lon"])
+    label_data = label_data[label_data["country"].str.lower() != "unknown"]
+    country_labels = (
+        label_data.groupby("country", as_index=False)
+        .agg(lat=("lat", "median"), lon=("lon", "median"), records=("country", "size"))
+        .nlargest(12, "records")
+        .to_dict(orient="records")
+    )
+
     return {
         "rows": len(df),
         "countries": int(df["country"].replace("Unknown", np.nan).nunique()) if "country" in df else 0,
@@ -93,6 +107,7 @@ def load_summary() -> dict[str, Any] | None:
             if "lat" in df.columns and "lon" in df.columns
             else []
         ),
+        "country_labels": country_labels,
     }
 
 
@@ -115,6 +130,48 @@ def load_hotspots() -> gpd.GeoDataFrame | None:
     gdf["lat"] = gdf.geometry.y
     gdf["lon"] = gdf.geometry.x
     return gdf
+
+
+@lru_cache(maxsize=1)
+def load_basemap() -> gpd.GeoDataFrame | None:
+    """Load the vendored Natural Earth boundaries used by the offline map."""
+    if not BASEMAP_PATH.exists():
+        return None
+    return gpd.read_file(BASEMAP_PATH)
+
+
+@lru_cache(maxsize=1)
+def load_place_labels() -> pd.DataFrame:
+    """Return selected European city labels from the local airport dataset."""
+    if not AIRPORTS_PATH.exists():
+        return pd.DataFrame(columns=["city", "lat", "lon"])
+    airports = pd.read_csv(AIRPORTS_PATH, usecols=["city", "lat", "lon"])
+    airports = airports.dropna(subset=["city", "lat", "lon"])
+    airports = airports[airports["city"].isin(MAP_CITY_LABELS)]
+    return airports.groupby("city", as_index=False).agg(lat=("lat", "median"), lon=("lon", "median"))
+
+
+def offline_geocode(query: str) -> tuple[float, float, str] | None:
+    """Resolve a country name from the local boundary dataset without internet access."""
+    normalized = " ".join(query.casefold().strip().split())
+    aliases = {
+        "uk": "united kingdom",
+        "great britain": "united kingdom",
+        "usa": "united states of america",
+        "united states": "united states of america",
+        "south korea": "south korea",
+        "north korea": "north korea",
+    }
+    normalized = aliases.get(normalized, normalized)
+    basemap = load_basemap()
+    if basemap is None:
+        return None
+    matches = basemap[basemap["name"].str.casefold() == normalized]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    point = row.geometry.representative_point()
+    return float(point.y), float(point.x), str(row["name"])
 
 
 @lru_cache(maxsize=1)
@@ -142,21 +199,128 @@ def get_backend():
 
 
 @lru_cache(maxsize=1)
-def overview_map_html() -> str:
+def overview_map_figure() -> go.Figure:
+    """Render a geographic coordinate plot using only local project data.
+
+    This deliberately uses Cartesian longitude/latitude axes instead of online
+    map tiles, so the overview remains available without internet access.
+    """
     summary = load_summary()
+    if not summary or not summary["map_points"]:
+        return empty_figure("No coordinate data available", 380)
+
+    points = np.asarray(summary["map_points"], dtype=float)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=points[:, 1],
+            y=points[:, 0],
+            mode="markers",
+            name="PFAS measurements",
+            marker={"size": 4, "color": "rgba(46, 139, 87, 0.28)"},
+            hovertemplate="Longitude: %{x:.3f}<br>Latitude: %{y:.3f}<extra>Measurement</extra>",
+        )
+    )
+
+    basemap = load_basemap()
+    if basemap is not None and not basemap.empty:
+        outline_x: list[float | None] = []
+        outline_y: list[float | None] = []
+        for geometry in basemap.geometry:
+            boundary = geometry.boundary
+            lines = [boundary] if boundary.geom_type == "LineString" else list(boundary.geoms)
+            for line in lines:
+                xs, ys = line.xy
+                outline_x.extend([*xs, None])
+                outline_y.extend([*ys, None])
+        fig.add_trace(
+            go.Scatter(
+                x=outline_x,
+                y=outline_y,
+                mode="lines",
+                name="Country boundaries",
+                line={"color": "rgba(76, 93, 92, 0.42)", "width": 0.7},
+                fill="toself",
+                fillcolor="rgba(255, 255, 255, 0.80)",
+                hoverinfo="skip",
+            )
+        )
+
     hotspots = load_hotspots()
-    fmap = folium.Map(location=[51.0, 10.0], zoom_start=4, tiles="CartoDB positron")
     if hotspots is not None and not hotspots.empty:
-        heat_data = [[r["lat"], r["lon"], max(float(r["gi_zscore"]), 0)] for _, r in hotspots.iterrows()]
-        HeatMap(
-            heat_data,
-            radius=18,
-            blur=22,
-            gradient={"0.2": "#D9C7B8", "0.5": "#C8A68D", "0.8": ACCENT, "1.0": ACCENT_SOFT},
-        ).add_to(fmap)
-    if summary and summary["map_points"]:
-        FastMarkerCluster(summary["map_points"]).add_to(fmap)
-    return fmap.get_root().render()
+        sample = hotspots.sample(min(3000, len(hotspots)), random_state=42)
+        fig.add_trace(
+            go.Scattergl(
+                x=sample["lon"],
+                y=sample["lat"],
+                mode="markers",
+                name="Detected hotspots",
+                marker={
+                    "size": 6,
+                    "color": sample["gi_zscore"],
+                    "colorscale": [[0, "#F6B08F"], [1, "#D96B34"]],
+                    "showscale": True,
+                    "colorbar": {"title": "Hotspot<br>strength", "thickness": 12},
+                },
+                hovertemplate="Longitude: %{x:.3f}<br>Latitude: %{y:.3f}<br>Strength: %{marker.color:.1f}<extra>Hotspot</extra>",
+            )
+        )
+
+    labels = summary["country_labels"]
+    if labels:
+        label_df = pd.DataFrame(labels)
+        fig.add_trace(
+            go.Scatter(
+                x=label_df["lon"],
+                y=label_df["lat"],
+                mode="text",
+                name="Countries with records",
+                text=label_df["country"],
+                textposition="top center",
+                textfont={"size": 10, "color": "#4C5D5C"},
+                hovertemplate="%{text}<br>%{customdata:,} local records<extra>Coverage</extra>",
+                customdata=label_df["records"],
+            )
+        )
+
+    cities = load_place_labels()
+    if not cities.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=cities["lon"],
+                y=cities["lat"],
+                mode="markers+text",
+                name="Major cities",
+                text=cities["city"],
+                textposition="bottom center",
+                marker={"size": 4, "color": "#455A64"},
+                textfont={"size": 9, "color": "#455A64"},
+                hovertemplate="%{text}<extra>Major city</extra>",
+            )
+        )
+
+    layout = base_figure_layout(380)
+    layout.update(
+        {
+            "legend": {"orientation": "h", "y": 1.10, "x": 0},
+            "plot_bgcolor": "#DCECEF",
+            "xaxis": {**layout["xaxis"], "title": "Longitude", "zeroline": False, "range": [-15, 42]},
+            "yaxis": {**layout["yaxis"], "title": "Latitude", "zeroline": False, "range": [33, 72], "scaleanchor": "x", "scaleratio": 1},
+            "margin": {"l": 48, "r": 56, "t": 44, "b": 44},
+            "annotations": [{
+                "text": "Offline map — country boundaries, major-city labels, and PFAS data are loaded locally",
+                "x": 0,
+                "y": -0.20,
+                "xref": "paper",
+                "yref": "paper",
+                "showarrow": False,
+                "font": {"size": 10, "color": MUTED},
+                "xanchor": "left",
+            }],
+        }
+    )
+    fig.update_layout(layout)
+    return fig
 
 
 def base_figure_layout(height: int = 360) -> dict[str, Any]:

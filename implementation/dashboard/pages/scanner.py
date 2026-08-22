@@ -10,6 +10,7 @@ from dash_common import (
     get_backend,
     glass_card,
     metric,
+    offline_geocode,
     page_header,
     section_title,
     serialize_scan_result,
@@ -111,6 +112,14 @@ def layout():
 def geocode_address(_clicks, address):
     if not address:
         return no_update, no_update, "Enter an address first."
+
+    def offline_fallback():
+        offline_match = offline_geocode(str(address))
+        if offline_match:
+            lat, lon, label = offline_match
+            return round(lat, 5), round(lon, 5), f"Offline location match: {label}"
+        return no_update, no_update, "Location search is unavailable. Enter coordinates manually, or search by country name while offline."
+
     try:
         from geopy.geocoders import Nominatim
         from geopy.exc import GeocoderTimedOut, GeocoderServiceError
@@ -126,12 +135,12 @@ def geocode_address(_clicks, address):
                 time.sleep(1 * (attempt + 1))
 
         if not loc:
-            return no_update, no_update, "Location not found or request timed out. Try again later."
+            return offline_fallback()
         return round(loc.latitude, 5), round(loc.longitude, 5), loc.address[:90]
-    except GeocoderServiceError as exc:
-        return no_update, no_update, f"Search failed (service error): {exc}"
-    except Exception as exc:
-        return no_update, no_update, f"Search failed: {exc}"
+    except GeocoderServiceError:
+        return offline_fallback()
+    except Exception:
+        return offline_fallback()
 
 
 @dash.callback(
