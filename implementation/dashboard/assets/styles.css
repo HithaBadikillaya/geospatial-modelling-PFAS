@@ -49,6 +49,14 @@ a { color: inherit; text-decoration: none; }
   background: var(--bg);
 }
 
+.report-page { padding-bottom: 36px; }
+.report-actions { justify-content: flex-end; margin-bottom: 14px; }
+.report-risk { color: var(--accent-dark); font-size: 2rem; font-weight: 800; margin: 8px 0; }
+.report-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.report-table th, .report-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.report-table th { color: var(--muted); font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.report-table td { color: var(--ink); }
+
 /* ============================================================
    TOP BAR — 100% FLUID WIDTH
    ============================================================ */

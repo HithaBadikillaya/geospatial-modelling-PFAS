@@ -272,6 +272,7 @@ class PFASPredictor:
                 "shap_values":               all_shap,
                 "feature_vector":            base["feature_vector"],
                 "substance":                 "GENERAL",
+                "compound_results":          {sub: result for sub, result in zip(SUBSTANCES, sub_results)},
             }
 
         X, nearest_km, airport_km = self.build_feature_frame(lat, lon, substance, year, media_type)

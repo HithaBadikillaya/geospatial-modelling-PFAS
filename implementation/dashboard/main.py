@@ -9,6 +9,7 @@ NAV_ITEMS = [
     ("Scanner", "/scanner", "⌖"),
     ("Simulation", "/simulation", "⇄"),
     ("Analysis", "/analysis", "≋"),
+    ("Report", "/report", "▤"),
     ("Explorer", "/explorer", "◌"),
     ("AI Assistant", "/ai-assistant", "✦"),
 ]
@@ -41,6 +42,7 @@ def app_shell() -> html.Div:
             dcc.Store(id="scan-store", storage_type="session"),
             dcc.Store(id="xai-store", storage_type="session"),
             dcc.Store(id="sim-store", storage_type="session"),
+            dcc.Store(id="report-store", storage_type="session"),
             dcc.Store(id="chat-store", storage_type="session", data=[]),
             html.Div(
                 [
@@ -82,6 +84,7 @@ app.layout = app_shell
     Output({"type": "nav-link", "href": "/scanner"}, "className"),
     Output({"type": "nav-link", "href": "/simulation"}, "className"),
     Output({"type": "nav-link", "href": "/analysis"}, "className"),
+    Output({"type": "nav-link", "href": "/report"}, "className"),
     Output({"type": "nav-link", "href": "/explorer"}, "className"),
     Output({"type": "nav-link", "href": "/ai-assistant"}, "className"),
     Input("url", "pathname"),
