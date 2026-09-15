@@ -10,7 +10,7 @@ Runs the full pipeline in order:
   4. CCI computation                       (implementation/cci.py)
 
 After this completes, launch the dashboard with:
-  streamlit run implementation/dashboard.py
+    python implementation/dashboard/main.py
 """
 
 import os
@@ -70,14 +70,13 @@ def main():
 ╚══════════════════════════════════════════════════════╝
 
 Launch the dashboard:
-  streamlit run implementation/dashboard.py
+    python implementation/dashboard/main.py
 
 Or run individual steps:
   python -m implementation.clean
   python -m implementation.train
   python -m implementation.hotspot
 """)
-
 
 if __name__ == "__main__":
     main()

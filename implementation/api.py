@@ -4,7 +4,7 @@ implementation/api.py
 PFAS Global Inference Engine — State-of-the-Art Geospatial Risk Model
 ----------------------------------------------------------------------
 Features:
-  1. Calibrated ensemble inference (Isotonic Platt scaling + LightGBM + KDTree spatial features)
+    1. Calibrated ensemble inference (Platt scaling + LightGBM + KDTree spatial features)
   2. Conformal Prediction 90% uncertainty bounds for estimated concentration
   3. Multi-substance probability aggregation (1 - ∏(1 - p_i)) for General Total PFAS score
   4. Robust fallback architecture for 100% site reliability
@@ -132,6 +132,10 @@ class PFASPredictor:
 
         log.info("PFASPredictor initialized successfully.")
 
+    def _predict_probability(self, X: pd.DataFrame) -> float:
+        probability = float(self.clf.predict_proba(X)[0, 1])
+        return float(np.clip(probability, 1e-6, 1.0 - 1e-6))
+
     def build_feature_frame(
         self,
         lat: float,
@@ -149,6 +153,8 @@ class PFASPredictor:
                 nearest_km = float(d_tr[0]) * EARTH_R
             except Exception:
                 nearest_km = 120.0
+        if not np.isfinite(nearest_km):
+            nearest_km = 120.0
 
         airport_km = 45.0
         if self.tree_air is not None:
@@ -157,16 +163,25 @@ class PFASPredictor:
                 airport_km = float(d_air[0]) * EARTH_R
             except Exception:
                 airport_km = 45.0
+        if not np.isfinite(airport_km):
+            airport_km = 45.0
 
         # Spatial density & log value
         mean_log_50 = 2.4
         density_50 = 12
         if self.tree_train is not None:
             try:
-                idx_50 = self.tree_train.query_ball_point(pt[0], r=50.0 / EARTH_R)
-                if idx_50:
-                    mean_log_50 = float(np.mean(self.train_vals[idx_50]))
-                    density_50 = len(idx_50)
+                # Keep live features consistent with clean.build_proximity_features,
+                # which uses the nearest 50 training points within the radius.
+                neighbour_count = min(50, len(self.train_vals))
+                distances, indices = self.tree_train.query(pt[0], k=neighbour_count)
+                distances = np.atleast_1d(distances)
+                indices = np.atleast_1d(indices)
+                within_mask = distances <= 50.0 / EARTH_R
+                if within_mask.any():
+                    nearby_values = self.train_vals[indices[within_mask]]
+                    mean_log_50 = float(np.mean(nearby_values))
+                    density_50 = int(within_mask.sum())
             except Exception:
                 pass
 
@@ -262,7 +277,7 @@ class PFASPredictor:
         X, nearest_km, airport_km = self.build_feature_frame(lat, lon, substance, year, media_type)
 
         try:
-            prob = float(self.clf.predict_proba(X)[0, 1])
+            prob = self._predict_probability(X)
         except Exception:
             prob = 0.5
 

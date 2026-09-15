@@ -436,7 +436,9 @@ def build_proximity_features(df: pd.DataFrame) -> pd.DataFrame:
         with open(airport_pkl, "rb") as f:
             tree_air = pickle.load(f)
         d_air, _ = tree_air.query(coords_rad, k=1)
-        df["dist_to_airport_km"] = (d_air * EARTH_R).astype("float32")
+        dist = (d_air * EARTH_R).astype("float32")
+        # Replace infinity (no neighbor found) with -1.0
+        df["dist_to_airport_km"] = np.where(np.isinf(dist), -1.0, dist).astype("float32")
     else:
         df["dist_to_airport_km"] = np.float32(-1.0)
 

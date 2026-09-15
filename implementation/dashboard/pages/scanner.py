@@ -10,6 +10,7 @@ from dash_common import (
     get_backend,
     glass_card,
     metric,
+    offline_geocode,
     page_header,
     section_title,
     serialize_scan_result,
@@ -111,6 +112,14 @@ def layout():
 def geocode_address(_clicks, address):
     if not address:
         return no_update, no_update, "Enter an address first."
+
+    def offline_fallback():
+        offline_match = offline_geocode(str(address))
+        if offline_match:
+            lat, lon, label = offline_match
+            return round(lat, 5), round(lon, 5), f"Offline location match: {label}"
+        return no_update, no_update, "Location search is unavailable. Enter coordinates manually, or search by country name while offline."
+
     try:
         from geopy.geocoders import Nominatim
         from geopy.exc import GeocoderTimedOut, GeocoderServiceError
@@ -126,12 +135,12 @@ def geocode_address(_clicks, address):
                 time.sleep(1 * (attempt + 1))
 
         if not loc:
-            return no_update, no_update, "Location not found or request timed out. Try again later."
+            return offline_fallback()
         return round(loc.latitude, 5), round(loc.longitude, 5), loc.address[:90]
-    except GeocoderServiceError as exc:
-        return no_update, no_update, f"Search failed (service error): {exc}"
-    except Exception as exc:
-        return no_update, no_update, f"Search failed: {exc}"
+    except GeocoderServiceError:
+        return offline_fallback()
+    except Exception:
+        return offline_fallback()
 
 
 @dash.callback(
@@ -188,7 +197,18 @@ def render_scan_result(scan, xai_payload):
             "span-12",
         )
 
-    probability = float(scan["exceedance_prob"])
+    def numeric_value(key: str, default: float = 0.0) -> float:
+        value = scan.get(key, default)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return default
+        return value if value == value and abs(value) != float("inf") else default
+
+    probability = numeric_value("exceedance_prob")
+    predicted_value = numeric_value("predicted_value_ngl")
+    nearest_sample = numeric_value("dist_to_nearest_sample_km", 120.0)
+    airport_proximity = numeric_value("dist_to_airport_km", 45.0)
     color = "#2E8B57" if probability < 0.35 else "#F28C62" if probability < 0.65 else "#D96B34"
     headline = xai_payload.get("headline") if xai_payload else scan.get("confidence_note", "")
     return html.Div(
@@ -206,11 +226,11 @@ def render_scan_result(scan, xai_payload):
                     metric("Risk probability", f"{probability*100:.1f}%", scan.get("confidence_level", "")),
                     metric(
                         "Est. concentration",
-                        f"{float(scan['predicted_value_ngl']):.1f} ng/L",
+                        f"{predicted_value:.1f} ng/L",
                         f"90% CI: {scan.get('conc_lower_ngl', 0.0):.1f}–{scan.get('conc_upper_ngl', 0.0):.1f}",
                     ),
-                    metric("Nearest sample", f"{float(scan['dist_to_nearest_sample_km']):.0f} km", "Training distance"),
-                    metric("Airport proximity", f"{float(scan['dist_to_airport_km']):.0f} km", "AFFF proxy"),
+                    metric("Nearest sample", f"{nearest_sample:.0f} km", "Training distance"),
+                    metric("Airport proximity", f"{airport_proximity:.0f} km", "AFFF proxy"),
                 ],
                 className="metric-grid-4 span-12",
             ),
