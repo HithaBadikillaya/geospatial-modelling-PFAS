@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from .report_models import AnalyticsReport
+from .thresholds import exceedance_category, normalize_probability
 
 COMPOUNDS = ["PFOS", "PFOA", "PFNA", "PFDA", "PFHXS", "PFHPA", "PFBS"]
 COMPOUND_INFO = {
@@ -15,14 +16,6 @@ COMPOUND_INFO = {
 }
 
 
-def _risk_category(probability: float) -> str:
-    if probability < 0.35:
-        return "LOW"
-    if probability < 0.65:
-        return "MEDIUM"
-    return "HIGH"
-
-
 def _json_value(value: Any) -> Any:
     if hasattr(value, "item"):
         return value.item()
@@ -31,7 +24,7 @@ def _json_value(value: Any) -> Any:
 
 def build_report(scan: dict[str, Any], xai: dict[str, Any] | None = None, simulation: dict[str, Any] | None = None) -> AnalyticsReport:
     now = datetime.now(timezone.utc).isoformat()
-    probability = float(scan.get("exceedance_prob", 0.0))
+    probability = normalize_probability(scan.get("exceedance_prob"))
     concentration = float(scan.get("predicted_value_ngl", 0.0))
     threshold = 100.0
     selected = str(scan.get("substance", "GENERAL")).upper()
@@ -47,7 +40,8 @@ def build_report(scan: dict[str, Any], xai: dict[str, Any] | None = None, simula
         compounds.append({
             "compound": compound, "type": info[0], "carbon_chain": info[1], "priority": info[2],
             "predicted_concentration_ngl": value, "exceedance_probability": prob,
-            "risk_category": _risk_category(float(prob)) if prob is not None else None,
+            "exceedance_category": exceedance_category(prob) if prob is not None else None,
+            "evaluation_status": "Evaluated" if value is not None or prob is not None else "Not evaluated",
             "threshold_status": ("Exceeds" if value is not None and float(value) >= threshold else "Below") if value is not None else None,
         })
 
@@ -68,7 +62,7 @@ def build_report(scan: dict[str, Any], xai: dict[str, Any] | None = None, simula
             "report_generation_version": "1.0",
         },
         executive_summary={
-            "overall_risk": _risk_category(probability), "risk_score": probability * 100,
+            "exceedance_category": exceedance_category(probability),
             "exceedance_probability": probability, "predicted_concentration_ngl": concentration,
             "confidence_level": scan.get("confidence_level"), "confidence_note": scan.get("confidence_note"),
             "threshold_ngl": threshold, "interpretation": (xai or {}).get("headline", scan.get("confidence_note", "Model-derived site estimate.")),
@@ -77,17 +71,17 @@ def build_report(scan: dict[str, Any], xai: dict[str, Any] | None = None, simula
         location_context=location,
         compounds=compounds,
         explainability={
-            "top_features": top_features, "risk_drivers": (xai or {}).get("risk_drivers", []),
+            "top_features": top_features, "prediction_drivers": (xai or {}).get("risk_drivers", []),
             "protective_factors": (xai or {}).get("protective_factors", []),
             "data_quality_note": (xai or {}).get("data_quality_note", "SHAP explanation unavailable for this prediction."),
         },
         model={"algorithm": "LightGBM", "feature_count": len(scan.get("feature_vector", {})), "target": "above_100_ng_l", "calibration": "Isotonic regression (when present)", "oversampling": "ADASYN (training only)", "preprocessing": "Existing project feature pipeline"},
-        validation={"method": "5-fold Spatial Block GroupKFold", "note": "Spatial blocks reduce geographic leakage between nearby samples.", "metrics": "Validation metrics are not available in the scan payload."},
+        validation={"method": "5-fold Spatial Block GroupKFold", "note": "Spatial blocks reduce geographic leakage between nearby samples.", "metrics_available": False, "metrics_note": "This report describes the validation methodology; metrics are not available for the individual scan."},
         simulations=[simulation] if simulation else [],
         provenance={"dataset": "dataset/pfas_golden.parquet", "record_count": "Available from dashboard dataset metadata", "prediction_timestamp": now},
         limitations=[
             "This is a model-derived estimate, not a laboratory measurement.",
-            "A high predicted risk does not prove contamination; a low risk does not guarantee its absence.",
+            "A high exceedance probability does not prove contamination; a low probability does not guarantee its absence.",
             "Reliability depends on training-data coverage, and spatial extrapolation may increase uncertainty.",
             "Interpret predictions alongside available observations and confirm important decisions with laboratory testing.",
         ],

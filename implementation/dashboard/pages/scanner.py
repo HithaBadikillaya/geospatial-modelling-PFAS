@@ -16,6 +16,7 @@ from dash_common import (
     serialize_scan_result,
     serialize_xai_result,
 )
+from reporting.thresholds import exceedance_category
 
 dash.register_page(__name__, path="/scanner", name="Scanner", title="PFAS Scanner")
 
@@ -162,7 +163,7 @@ def run_scan(_clicks, lat, lon, substance, year, media):
     try:
         clean_substance = str(substance).split(" ")[0]
         result = predictor.predict(float(lat), float(lon), substance=clean_substance, year=int(year), media_type=str(media))
-        scan_payload = serialize_scan_result({**result, "lat": float(lat), "lon": float(lon), "year": int(year), "media_type": str(media)})
+        scan_payload = serialize_scan_result({**result, "lat": float(lat), "lon": float(lon), "year": int(year), "media_type": str(media), "substance": clean_substance})
         xai_payload = None
         if xai:
             X_feat, _, _ = predictor.build_feature_frame(float(lat), float(lon), clean_substance, int(year), str(media))
@@ -209,7 +210,8 @@ def render_scan_result(scan, xai_payload):
     predicted_value = numeric_value("predicted_value_ngl")
     nearest_sample = numeric_value("dist_to_nearest_sample_km", 120.0)
     airport_proximity = numeric_value("dist_to_airport_km", 45.0)
-    color = "#2E8B57" if probability < 0.35 else "#F28C62" if probability < 0.65 else "#D96B34"
+    category = exceedance_category(probability)
+    color = {"LOW": "#2E8B57", "MEDIUM": "#F28C62", "HIGH": "#D96B34"}[category]
     headline = xai_payload.get("headline") if xai_payload else scan.get("confidence_note", "")
     return html.Div(
         [
@@ -223,7 +225,7 @@ def render_scan_result(scan, xai_payload):
             ),
             html.Div(
                 [
-                    metric("Risk probability", f"{probability*100:.1f}%", scan.get("confidence_level", "")),
+                    metric("Exceedance probability", f"{probability*100:.1f}%", category),
                     metric(
                         "Est. concentration",
                         f"{predicted_value:.1f} ng/L",
@@ -234,7 +236,31 @@ def render_scan_result(scan, xai_payload):
                 ],
                 className="metric-grid-4 span-12",
             ),
+            html.Div(
+                [
+                    html.Button("Generate Detailed Report", id="generate-report", className="primary-button"),
+                    html.Span(id="report-generation-status", className="status-note"),
+                ],
+                className="button-row span-12",
+            ),
         ],
         className="dashboard-grid",
     )
+
+
+@dash.callback(
+    Output("report-store", "data"),
+    Output("report-generation-status", "children"),
+    Output("url", "pathname"),
+    Input("generate-report", "n_clicks"),
+    State("scan-store", "data"),
+    State("xai-store", "data"),
+    State("sim-store", "data"),
+    prevent_initial_call=True,
+)
+def generate_report(_clicks, scan, xai_payload, sim_payload):
+    if not scan:
+        return no_update, "Run a scan before generating a report.", no_update
+    from reporting import build_report
+    return build_report(scan, xai_payload, sim_payload).to_dict(), "Detailed report generated.", "/report"
 
